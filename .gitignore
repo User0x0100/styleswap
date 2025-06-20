@@ -1,0 +1,12 @@
+*.onnx
+*.pth
+*.ckpt
+*.pyc
+*.png
+*.jpg
+ckpt/
+sample/
+log/
+onnx_model/
+ops/fused_act/torch_ext_build
+ops/upfirdn2d/torch_ext_build
