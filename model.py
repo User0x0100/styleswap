@@ -903,6 +903,58 @@ class StyleGAN2Discriminator(nn.Module):
         return out
 
 
+class MultiScaleDiscriminator(nn.Module):
+    """
+    Multi-Scale Discriminator (Modified Version)
+      - scales: 下采样倍率列表，例如 [1, 2, 4] 表示原始、1/2、1/4 三个分辨率
+      - disc_kwargs: 传给 StyleGAN2Discriminator 的其他参数
+    """
+
+    def __init__(self, out_size, scales=(1, 2, 4), **disc_kwargs):
+        super().__init__()
+        self.scales = scales
+        self.num_D = len(scales)
+
+        # 为每个尺度创建一个判别器实例
+        self.discriminators = nn.ModuleList(
+            [
+                StyleGAN2Discriminator(out_size // scale, **disc_kwargs)
+                for scale in scales
+            ]
+        )
+
+        self.downsample = nn.AvgPool2d(
+            3, stride=2, padding=[1, 1], count_include_pad=False
+        )
+
+    def forward(self, x, return_downsampled: bool = False):
+
+        outputs = []
+        if return_downsampled:
+            downsampled = []
+        input_downsampled = x
+
+        # 按尺度顺序处理（从大到小）
+        for i in range(self.num_D):
+            # 使用当前尺度对应的判别器
+            disc = self.discriminators[i]
+            out = disc(input_downsampled)
+            if return_downsampled:
+                downsampled.append(input_downsampled)
+            outputs.append(out)
+
+            # 如果不是最后一个尺度，则对输入进行下采样
+            if i != (self.num_D - 1):
+                input_downsampled = self.downsample(input_downsampled)
+        if return_downsampled:
+            return outputs, downsampled
+        else:
+            return outputs, None
+
+    def load_sig_disc_wg(self, wg):
+        self.discriminators[0].load_state_dict(wg)
+
+
 if __name__ == "__main__":
     from prettytable import PrettyTable
 

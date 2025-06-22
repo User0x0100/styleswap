@@ -1,6 +1,7 @@
 from .losses import (
     CharbonnierLoss,
     GANLoss,
+    MultiScaleGANLoss,
     L1Loss,
     MSELoss,
     PerceptualLoss,

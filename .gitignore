@@ -4,6 +4,8 @@
 *.pyc
 *.png
 *.jpg
+*.mp4
+*.webp
 ckpt/
 sample/
 log/

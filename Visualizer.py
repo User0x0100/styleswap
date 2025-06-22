@@ -27,9 +27,9 @@ from dataloader.data_loader import FaceDataset
 # 全局配置
 CONFIG = {
     "size": 512,
-    "checkpoint": "ckpt/715000_512.pth",
+    "checkpoint": "ckpt/963166_512.pth",
     "device": "cuda:0",
-    "image_path": "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
+    "image_path": ["/home/liaohaixun/styleswap_data/dateset/ffhq_1024"],
     "output_dir": "loss_visualization_output",
     "loss_type": "vgg19",
     "layer_weights": {
@@ -280,7 +280,7 @@ def main(config: Dict) -> None:
     )
 
     perceptual_loss = setup_perceptual_loss(config)
-    dataset = FaceDataset(config["image_path"], config["size"])
+    dataset = FaceDataset(size=config["size"], image_dirs=config["image_path"])
     data_loader = DataLoader(dataset, batch_size=1, sampler=RandomSampler(dataset))
     data_iter = sample_data(data_loader)
 

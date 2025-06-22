@@ -47,10 +47,10 @@ class FaceDataset(Dataset):
 
     def __init__(
         self,
-        image_dirs: Union[
-            str, List[str], List[Tuple[str, float]]
-        ],  # 支持单个路径、路径列表或带概率的路径列表
         size: int,
+        image_dirs: Optional[
+            Union[str, List[str], List[Tuple[str, float]]]
+        ] = None,  # 改为可选项
         target_dirs: Optional[
             Union[str, List[str], List[Tuple[str, float]]]
         ] = None,  # target专用目录
@@ -74,11 +74,13 @@ class FaceDataset(Dataset):
         self.flip_prob = flip_prob
         self.same_image_prob = same_image_prob
 
-        # 初始化人脸解析器
+        # 初始化人脸解析器 默认输出尺寸: 512
         self.face_parsing = FaceParsing(device)
 
         # 解析目录配置
-        self.image_dirs_config = self._parse_dirs_config(image_dirs)
+        self.image_dirs_config = (
+            self._parse_dirs_config(image_dirs) if image_dirs else []
+        )
         self.target_dirs_config = (
             self._parse_dirs_config(target_dirs) if target_dirs else None
         )
@@ -86,17 +88,33 @@ class FaceDataset(Dataset):
             self._parse_dirs_config(source_dirs) if source_dirs else None
         )
 
+        # 验证至少有一个目录配置
+        if (
+            not self.image_dirs_config
+            and not self.target_dirs_config
+            and not self.source_dirs_config
+        ):
+            raise ValueError(
+                "必须至少指定 image_dirs、target_dirs 或 source_dirs 中的一个"
+            )
+
+        # 验证target和source目录配置
+        target_config = self.target_dirs_config or self.image_dirs_config
+        source_config = self.source_dirs_config or self.image_dirs_config
+
+        if not target_config:
+            raise ValueError("没有可用的target目录配置")
+        if not source_config:
+            raise ValueError("没有可用的source目录配置")
+
         # 创建目录选择器
-        self.target_selector = WeightedDirectorySelector(
-            self.target_dirs_config or self.image_dirs_config
-        )
-        self.source_selector = WeightedDirectorySelector(
-            self.source_dirs_config or self.image_dirs_config
-        )
+        self.target_selector = WeightedDirectorySelector(target_config)
+        self.source_selector = WeightedDirectorySelector(source_config)
 
         # 获取所有需要缓存的目录
         all_dirs_to_cache = set()
-        all_dirs_to_cache.update([d[0] for d in self.image_dirs_config])
+        if self.image_dirs_config:
+            all_dirs_to_cache.update([d[0] for d in self.image_dirs_config])
         if self.target_dirs_config:
             all_dirs_to_cache.update([d[0] for d in self.target_dirs_config])
         if self.source_dirs_config:
@@ -107,8 +125,7 @@ class FaceDataset(Dataset):
 
         # 计算数据集长度（使用target目录中的总文件数）
         self.length = sum(
-            len(self.dir_files_cache.get(dir_path, []))
-            for dir_path, _ in (self.target_dirs_config or self.image_dirs_config)
+            len(self.dir_files_cache.get(dir_path, [])) for dir_path, _ in target_config
         )
 
         print(f"数据集初始化完成:")
@@ -171,12 +188,12 @@ class FaceDataset(Dataset):
                 file_count = len(self.dir_files_cache.get(dir_path, []))
                 print(f"    {dir_path}: {file_count} 个文件, 权重 {weight:.3f}")
 
+        if self.image_dirs_config:
+            print_dir_config("公共目录", self.image_dirs_config)
         if self.target_dirs_config:
             print_dir_config("Target目录", self.target_dirs_config)
         if self.source_dirs_config:
             print_dir_config("Source目录", self.source_dirs_config)
-        if not self.target_dirs_config and not self.source_dirs_config:
-            print_dir_config("公共目录", self.image_dirs_config)
 
         print(f"  数据集长度: {self.length}")
 
@@ -328,7 +345,7 @@ class FaceDataset(Dataset):
         target_path = self._get_random_file_from_dirs(self.target_selector)
         target = (
             Image.open(target_path)
-            .resize([self.size, self.size], resample=Image.Resampling.BOX)
+            .resize([self.size, self.size], resample=Image.Resampling.LANCZOS)
             .convert("RGB")
         )
 
@@ -357,7 +374,7 @@ class FaceDataset(Dataset):
             src_path = self._get_random_file_from_dirs(self.source_selector)
             source = (
                 Image.open(src_path)
-                .resize([self.size, self.size], resample=Image.Resampling.BOX)
+                .resize([self.size, self.size], resample=Image.Resampling.LANCZOS)
                 .convert("RGB")
             )
             source = self.source_rand_transforms(source)
@@ -368,7 +385,8 @@ class FaceDataset(Dataset):
     def refresh_cache(self, specific_dirs: List[str] = None):
         """手动刷新缓存，重新扫描指定目录或所有目录"""
         all_dirs = set()
-        all_dirs.update([d[0] for d in self.image_dirs_config])
+        if self.image_dirs_config:
+            all_dirs.update([d[0] for d in self.image_dirs_config])
         if self.target_dirs_config:
             all_dirs.update([d[0] for d in self.target_dirs_config])
         if self.source_dirs_config:
@@ -388,9 +406,9 @@ class FaceDataset(Dataset):
                 print(f"目录 {dir_path} 缓存已更新，共 {len(filenames)} 个文件")
 
         # 重新计算数据集长度
+        target_config = self.target_dirs_config or self.image_dirs_config
         self.length = sum(
-            len(self.dir_files_cache.get(dir_path, []))
-            for dir_path, _ in (self.target_dirs_config or self.image_dirs_config)
+            len(self.dir_files_cache.get(dir_path, [])) for dir_path, _ in target_config
         )
 
         # 保存缓存
@@ -413,7 +431,9 @@ class FaceDataset(Dataset):
 
         info = {
             "total_length": self.length,
-            "image_dirs": get_dir_info(self.image_dirs_config),
+            "image_dirs": (
+                get_dir_info(self.image_dirs_config) if self.image_dirs_config else None
+            ),
             "target_dirs": (
                 get_dir_info(self.target_dirs_config)
                 if self.target_dirs_config
@@ -433,11 +453,14 @@ if __name__ == "__main__":
 
     # 示例4: 原有的多目录配置
     dataset = FaceDataset(
-        image_dirs=[
-            "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
-            "/home/liaohaixun/styleswap_data/dateset/CelebAHQ-1024x1024",
-            "/home/liaohaixun/styleswap_data/dateset/vggface2_hq512",
-        ],
+        image_dirs=["/home/liaohaixun/styleswap_data/dateset/ffhq_1024"],
+        # target_dirs=[
+        #     ("filter_results/closed_eyes", 0.5),
+        #     ("filter_results/large_angle", 0.5),
+        # ],
+        # source_dirs=[
+        #     "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
+        # ],
         size=512,
         cache_file="dataset_cache.json",
     )

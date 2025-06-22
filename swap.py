@@ -40,9 +40,10 @@ class Swapper:
 
         # InsightFace detector + aligner (suppress verbose logs)
         self.detector = FaceAnalysis(
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+            providers=["CUDAExecutionProvider"],
+            allowed_modules=["detection"],
         )
-        self.detector.prepare(ctx_id=0, det_thresh=0.1, det_size=(640, 640))
+        self.detector.prepare(ctx_id=0, det_thresh=0.13, det_size=(640, 640))
 
         # Preprocessing pipeline
         self.preproc = transforms.Compose(
@@ -146,7 +147,7 @@ class Swapper:
                 fake, _, mask = self.net_g(frame, source_id)
                 fake_id = self.arcface(fake)
                 similarity = torch.cosine_similarity(source_id, fake_id).mean()
-                # fake = torch.where(mask.bool(), fake, frame)
+                fake = torch.where(mask.bool(), fake, frame)
 
             fake = fake.add(1.0).mul(127.5).clamp(0, 255).round().to(torch.uint8)
             fake = fake.permute(0, 2, 3, 1).contiguous()
@@ -168,19 +169,21 @@ if __name__ == "__main__":
     # target = f"/opt/share/deepfake/stable-diffusion/face_editor_test/高清数据/dfl_big/{random.randint(0,3124):04d}/{random.randint(0,999):04d}.png"
     # source = f"/opt/share/deepfake/stable-diffusion/face_editor_test/高清数据/dfl_big/{random.randint(0,3124):04d}/{random.randint(0,999):04d}.png"
 
-    target = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/{random.randint(0,69999):05d}.png"
-    source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/{random.randint(0,69999):05d}.png"
+    # target = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/{random.randint(0,69999):05d}.png"
+    # source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/{random.randint(0,69999):05d}.png"
     # source = target
 
     # target = f"/home/liaohaixun/styleswap_data/dateset/vggface2_hq512/{random.randint(0,1160249):06d}.jpg"
     # source = f"/home/liaohaixun/styleswap_data/dateset/vggface2_hq512/{random.randint(0,1160249):06d}.jpg"
 
-    # target = "/opt/share/deepfake/linshi/录屏素材/2023-03-10(郭宇杰 张xiaoyuan)/20230310-170534517郭宇杰(电脑录屏).mp4"
+    target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
+    # target = "/opt/share/deepfake/linshi/录屏素材/2023-02-17(袁忠 曹属馨)/20230217-160724910曹属馨(电脑录屏).mp4"
+    # target = "/opt/share/deepfake/linshi/录屏素材/2023-06-20(邓叮玲 许馨文)/20230620-155807793邓叮玲(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-08-28(李小姐 邱小姐)/20230828-122302李小姐(电脑录屏).mp4"
     # source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/{random.randint(0,69999):05d}.png"
 
     # target = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/25635.png"
     # source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/47125.png"
-    swapper = Swapper("ckpt/885000_512.pth")
-    swapper.swap(target, source, "result.png")
-    # swapper.swap_video(target, "wuyanzu.png", "result.mp4")
+    swapper = Swapper("ckpt/1015000_512.pth")
+    # swapper.swap(target, source, "result.png")
+    swapper.swap_video(target, "jay_c.webp", "result.mp4")

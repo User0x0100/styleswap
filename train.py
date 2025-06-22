@@ -8,7 +8,8 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LinearLR
 from losses.arcface import ArcFace
-from model import FullGenerator, StyleGAN2Discriminator
+from losses.losses import MultiScaleGANLoss
+from model import FullGenerator, StyleGAN2Discriminator, MultiScaleDiscriminator
 from losses import GANLoss, L1Loss, PerceptualLoss, r1_penalty, g_path_regularize
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
@@ -21,9 +22,9 @@ assert torch.cuda.is_available()
 class TrainSet:
 
     device: torch.device = torch.device("cuda", 0)
-    pretrain: None | str = "ckpt/877018_512.pth"
+    pretrain: None | str = "ckpt/1022105_512.pth"
 
-    batch: int = 4
+    batch: int = 8
     size: int = 512
     style_dim: int = 512
     n_mlp: int = 8
@@ -47,7 +48,7 @@ class TrainSet:
 
     ckpt_path: str = "ckpt"
     sample_path: str = "sample"
-    log_path: str = "log"
+    log_path: str = "log/train"
 
     id_loss_weight: float = 4.0
 
@@ -71,10 +72,19 @@ class TrainSet:
 
     mask_loss_weight: float = 1.0
 
-    image_path: str = [
+    same_image_prob: float = 0.1
+
+    # "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
+    # "/home/liaohaixun/styleswap_data/dateset/CelebAHQ-1024x1024",
+    # "/home/liaohaixun/styleswap_data/dateset/vggface2_hq512",
+
+    image_path = None
+
+    target_dirs = [
         "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
-        "/home/liaohaixun/styleswap_data/dateset/CelebAHQ-1024x1024",
-        "/home/liaohaixun/styleswap_data/dateset/vggface2_hq512",
+    ]
+    source_dirs = [
+        "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
     ]
 
 
@@ -82,11 +92,6 @@ def sample_data(loader):
     while True:
         for batch in loader:
             yield batch
-
-
-def requires_grad(model: nn.Module, flag: bool):
-    for p in model.parameters():
-        p.requires_grad = flag
 
 
 class Trainer:
@@ -107,7 +112,10 @@ class Trainer:
 
         self.loss_dict = {}
 
-        self.net_d = StyleGAN2Discriminator(self.config.size).to(self.config.device)
+        # self.net_d = StyleGAN2Discriminator(self.config.size).to(self.config.device)
+        self.net_d = MultiScaleDiscriminator(out_size=self.config.size).to(
+            self.config.device
+        )
 
         self.net_g = FullGenerator(
             self.config.size,
@@ -172,7 +180,7 @@ class Trainer:
         Path(self.config.sample_path).mkdir(exist_ok=True, parents=True)
         Path(self.config.log_path).mkdir(exist_ok=True, parents=True)
 
-        self.gan_loss = GANLoss(
+        self.gan_loss = MultiScaleGANLoss(
             self.config.gan_type, loss_weight=self.config.gan_loss_weight
         ).to(self.config.device)
         self.l1_loss = L1Loss(self.config.l1_loss_weight, self.config.l1_reduction).to(
@@ -190,9 +198,14 @@ class Trainer:
 
         self.arcface = ArcFace().to(self.config.device)
         self.arcface.eval()
-        requires_grad(self.arcface, False)
+        self.arcface.requires_grad_(False)
 
-        dataset = FaceDataset(self.config.image_path, self.config.size)
+        dataset = FaceDataset(
+            size=self.config.size,
+            target_dirs=self.config.target_dirs,
+            source_dirs=self.config.source_dirs,
+            same_image_prob=self.config.same_image_prob,
+        )
 
         loader = DataLoader(
             dataset,
@@ -266,15 +279,15 @@ class Trainer:
             # =============== 训练判别器 ===============
             if self.iter % cfg.d_optimiz_every == 0:
 
-                requires_grad(self.net_d, True)
-                requires_grad(self.net_g, False)
+                self.net_d.requires_grad_(True)
+                self.net_g.requires_grad_(False)
 
                 # 生成假图像
                 fake_img, _, _ = self.net_g(target, z_id.detach())
 
                 # 判别真实图像
-                fake_pred = self.net_d(fake_img.detach())
-                real_pred = self.net_d(target)
+                fake_pred, _ = self.net_d(fake_img.detach())
+                real_pred, _ = self.net_d(target)
 
                 # 计算判别器损失
                 l_d = (
@@ -284,18 +297,28 @@ class Trainer:
 
                 # 记录损失
                 self.loss_dict["l_d"] = l_d.detach()
-                self.loss_dict["real_score"] = real_pred.detach().mean()
-                self.loss_dict["fake_score"] = fake_pred.detach().mean()
+                # self.loss_dict["real_score"] = real_pred.detach().mean()
+                for i, pred in enumerate(real_pred):
+                    self.loss_dict[f"real_score_s{i}"] = pred.detach().mean()
+
+                for i, pred in enumerate(fake_pred):
+                    self.loss_dict[f"fake_score_s{i}"] = pred.detach().mean()
+                # self.loss_dict["fake_score"] = fake_pred.detach().mean()
 
                 # R1正则化
                 if self.iter % cfg.r1_reg_every == 0:
-                    target.requires_grad = True
+                    target.requires_grad_(True)
 
-                    real_pred = self.net_d(target)
-                    l_d_r1 = r1_penalty(real_pred, target)
-                    l_d_r1 = (
-                        cfg.r1_reg_weight / 2 * l_d_r1 * cfg.r1_reg_every
-                    ) / cfg.grad_accum_steps
+                    real_pred, downsampled = self.net_d(target, return_downsampled=True)
+                    l_d_r1 = 0.0
+                    for r, t in zip(real_pred, downsampled):
+                        l_d_r1_sig = r1_penalty(r, t)
+                        l_d_r1_sig = (
+                            cfg.r1_reg_weight / 2 * l_d_r1_sig * cfg.r1_reg_every
+                        ) / cfg.grad_accum_steps
+                        l_d_r1 += l_d_r1_sig
+
+                    l_d_r1 = l_d_r1 / len(downsampled)
                     self.loss_dict["l_d_r1"] = l_d_r1.detach().mean()
                     l_d += l_d_r1
 
@@ -308,12 +331,12 @@ class Trainer:
             # =============== 训练生成器 ===============
             if self.iter % cfg.g_optimiz_every == 0:
 
-                requires_grad(self.net_d, False)
-                requires_grad(self.net_g, True)
+                self.net_d.requires_grad_(False)
+                self.net_g.requires_grad_(True)
 
                 # 生成假图像
                 fake_img, _, fake_mask = self.net_g(target, z_id.detach())
-                fake_pred = self.net_d(fake_img)
+                fake_pred, _ = self.net_d(fake_img)
 
                 # ------------- 对抗损失 -------------
                 l_g = self.gan_loss(fake_pred, True, is_disc=False)

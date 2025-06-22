@@ -252,7 +252,7 @@ class ArcFace(nn.Module):
         )  #  https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch
         self._iresnet.load_state_dict(torch.load(weight, weights_only=True))
 
-    def forward(self, x, ud_samples_mode="area"):
-        x = F.interpolate(x, [112, 112], mode=ud_samples_mode)
+    def forward(self, x):
+        x = F.interpolate(x, [112, 112], mode="bicubic")
         id = self._iresnet(x)
         return F.normalize(id, p=2, dim=1)

@@ -21,8 +21,7 @@ class FaceParsing:
         )
         self.net.to(self.device)
         self.net.eval()
-        for p in self.net.parameters():
-            p.requires_grad = False
+        self.net.requires_grad_(False)
 
         self.transform = transforms.Compose(
             [
@@ -35,7 +34,7 @@ class FaceParsing:
         self.parts_idx_tensor = torch.tensor(parts_idx, device=self.device)
 
     def process(self, image: Image.Image):
-        image = image.resize((512, 512), Image.Resampling.BILINEAR)
+        image = image.resize((512, 512), Image.Resampling.LANCZOS)
         image = self.transform(image)
         image.unsqueeze_(0)
         image = image.to(self.device)
