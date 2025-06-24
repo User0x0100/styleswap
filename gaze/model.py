@@ -39,9 +39,7 @@ class GazeHandler:
         self.input_size = 160
         self.model = GazeModel.load_from_checkpoint(ckpt_path).to(device)
         self.model.eval()
-        for param in self.model.parameters():
-            param.requires_grad = False
-
+        self.model.requires_grad_(False)
         self.device = device
 
     def get(self, x):

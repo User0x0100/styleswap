@@ -22,9 +22,9 @@ assert torch.cuda.is_available()
 class TrainSet:
 
     device: torch.device = torch.device("cuda", 0)
-    pretrain: None | str = "ckpt/1022105_512.pth"
+    pretrain: None | str = "ckpt/1129103_512.pth"
 
-    batch: int = 8
+    batch: int = 12
     size: int = 512
     style_dim: int = 512
     n_mlp: int = 8
@@ -35,7 +35,7 @@ class TrainSet:
     grad_accum_steps: int = 1
 
     r1_reg_every: int = 16
-    r1_reg_weight: float = 10
+    r1_reg_weight: float = 10.0
 
     path_reg_every: int = 4
     path_reg_weight: float = 2.0
@@ -60,9 +60,10 @@ class TrainSet:
 
     PerceptualLoss_loss_type: str = "vgg19"
     PerceptualLoss_layer_weights: dict[str, float] = {
-        # "conv3_4": 0.75,
-        "relu3_4": 1.0,
-        # "conv4_3": 1.0,
+        "conv3_4": 1.0,
+        # "relu3_4": 1.0,
+        # "relu4_3": 1.0
+        "conv4_4": 1.0,
     }
     PerceptualLoss_use_input_norm: bool = True
     PerceptualLoss_range_norm: bool = True
@@ -72,19 +73,25 @@ class TrainSet:
 
     mask_loss_weight: float = 1.0
 
-    same_image_prob: float = 0.1
+    same_image_prob: float = 0.15
 
     # "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
     # "/home/liaohaixun/styleswap_data/dateset/CelebAHQ-1024x1024",
     # "/home/liaohaixun/styleswap_data/dateset/vggface2_hq512",
+    # "filter_results/closed_eyes"
+    # "filter_results/large_angle"
 
     image_path = None
 
     target_dirs = [
-        "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
+        ("/home/liaohaixun/styleswap_data/dateset/ffhq_1024", 0.25),
+        ("/home/liaohaixun/styleswap_data/dateset/CelebAHQ-1024x1024", 0.25),
+        ("filter_results/closed_eyes", 0.25),
+        ("filter_results/large_angle", 0.25),
     ]
     source_dirs = [
-        "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
+        ("/home/liaohaixun/styleswap_data/dateset/ffhq_1024", 0.5),
+        ("/home/liaohaixun/styleswap_data/dateset/CelebAHQ-1024x1024", 0.5),
     ]
 
 
@@ -103,39 +110,36 @@ class Trainer:
         config.r1_reg_every = config.r1_reg_every * config.d_optimiz_every
         config.path_reg_every = config.path_reg_every * config.g_optimiz_every
 
-        self.config = config
+        self.cfg = config
         self.iter = 1
 
-        torch.cuda.set_device(self.config.device)
+        torch.cuda.set_device(self.cfg.device)
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.benchmark = True
 
         self.loss_dict = {}
 
-        # self.net_d = StyleGAN2Discriminator(self.config.size).to(self.config.device)
-        self.net_d = MultiScaleDiscriminator(out_size=self.config.size).to(
-            self.config.device
-        )
+        self.net_d = MultiScaleDiscriminator(out_size=self.cfg.size).to(self.cfg.device)
 
         self.net_g = FullGenerator(
-            self.config.size,
-            style_dim=self.config.style_dim,
-            n_mlp=self.config.n_mlp,
-            isconcat=self.config.isconcat,
-        ).to(self.config.device)
+            self.cfg.size,
+            style_dim=self.cfg.style_dim,
+            n_mlp=self.cfg.n_mlp,
+            isconcat=self.cfg.isconcat,
+        ).to(self.cfg.device)
         self.net_g_ema = FullGenerator(
-            self.config.size,
-            style_dim=self.config.style_dim,
-            n_mlp=self.config.n_mlp,
-            isconcat=self.config.isconcat,
-        ).to(self.config.device)
+            self.cfg.size,
+            style_dim=self.cfg.style_dim,
+            n_mlp=self.cfg.n_mlp,
+            isconcat=self.cfg.isconcat,
+        ).to(self.cfg.device)
 
-        if self.config.pretrain is not None:
-            print(f"Loading pretrain checkpoint from {self.config.pretrain}")
+        if self.cfg.pretrain is not None:
+            print(f"Loading pretrain checkpoint from {self.cfg.pretrain}")
 
             checkpoint = torch.load(
-                self.config.pretrain,
-                map_location=self.config.device,
+                self.cfg.pretrain,
+                map_location=self.cfg.device,
                 weights_only=False,
             )
 
@@ -153,75 +157,75 @@ class Trainer:
 
         self.d_optimizer = torch.optim.Adam(
             params=self.net_d.parameters(),
-            lr=self.config.d_lr,
+            lr=self.cfg.d_lr,
             betas=(0.0, 0.99),
         )
 
         self.g_optimizer = torch.optim.Adam(
             params=self.net_g.parameters(),
-            lr=self.config.g_lr,
+            lr=self.cfg.g_lr,
             betas=(0.0, 0.99),
         )
 
-        if self.config.pretrain is not None:
+        if self.cfg.pretrain is not None:
             self.d_optimizer.load_state_dict(checkpoint["d_optim"])
             for param_group in self.d_optimizer.param_groups:
-                param_group["lr"] = self.config.d_lr
+                param_group["lr"] = self.cfg.d_lr
 
             self.g_optimizer.load_state_dict(checkpoint["g_optim"])
             for param_group in self.g_optimizer.param_groups:
-                param_group["lr"] = self.config.g_lr
+                param_group["lr"] = self.cfg.g_lr
             print("Optimizer state loaded from checkpoint.")
 
         print(f"d_optimizer_lr: {self.d_optimizer.param_groups[0]["lr"]}")
         print(f"g_optimizer_lr: {self.g_optimizer.param_groups[0]["lr"]}")
 
-        Path(self.config.ckpt_path).mkdir(exist_ok=True, parents=True)
-        Path(self.config.sample_path).mkdir(exist_ok=True, parents=True)
-        Path(self.config.log_path).mkdir(exist_ok=True, parents=True)
+        Path(self.cfg.ckpt_path).mkdir(exist_ok=True, parents=True)
+        Path(self.cfg.sample_path).mkdir(exist_ok=True, parents=True)
+        Path(self.cfg.log_path).mkdir(exist_ok=True, parents=True)
 
         self.gan_loss = MultiScaleGANLoss(
-            self.config.gan_type, loss_weight=self.config.gan_loss_weight
-        ).to(self.config.device)
-        self.l1_loss = L1Loss(self.config.l1_loss_weight, self.config.l1_reduction).to(
-            self.config.device
+            self.cfg.gan_type, loss_weight=self.cfg.gan_loss_weight
+        ).to(self.cfg.device)
+        self.l1_loss = L1Loss(self.cfg.l1_loss_weight, self.cfg.l1_reduction).to(
+            self.cfg.device
         )
         self.perceptualLoss = PerceptualLoss(
-            self.config.PerceptualLoss_layer_weights,
-            self.config.PerceptualLoss_loss_type,
-            self.config.PerceptualLoss_use_input_norm,
-            self.config.PerceptualLoss_range_norm,
-            self.config.PerceptualLoss_perceptual_weight,
-            self.config.PerceptualLoss_style_weight,
-            self.config.PerceptualLoss_criterion,
-        ).to(self.config.device)
+            self.cfg.PerceptualLoss_layer_weights,
+            self.cfg.PerceptualLoss_loss_type,
+            self.cfg.PerceptualLoss_use_input_norm,
+            self.cfg.PerceptualLoss_range_norm,
+            self.cfg.PerceptualLoss_perceptual_weight,
+            self.cfg.PerceptualLoss_style_weight,
+            self.cfg.PerceptualLoss_criterion,
+        ).to(self.cfg.device)
 
-        self.arcface = ArcFace().to(self.config.device)
+        self.arcface = ArcFace().to(self.cfg.device)
         self.arcface.eval()
         self.arcface.requires_grad_(False)
 
         dataset = FaceDataset(
-            size=self.config.size,
-            target_dirs=self.config.target_dirs,
-            source_dirs=self.config.source_dirs,
-            same_image_prob=self.config.same_image_prob,
+            size=self.cfg.size,
+            target_dirs=self.cfg.target_dirs,
+            source_dirs=self.cfg.source_dirs,
+            same_image_prob=self.cfg.same_image_prob,
         )
 
         loader = DataLoader(
             dataset,
-            batch_size=self.config.batch,
+            batch_size=self.cfg.batch,
             shuffle=True,
             num_workers=4,
             drop_last=True,
             pin_memory=True,
-            pin_memory_device=str(self.config.device),
+            pin_memory_device=str(self.cfg.device),
             prefetch_factor=3,
             persistent_workers=True,
             multiprocessing_context="spawn",
         )
         self.loader = sample_data(loader)
 
-        self.writer = SummaryWriter(log_dir=self.config.log_path)
+        self.writer = SummaryWriter(log_dir=self.cfg.log_path)
 
     def model_ema(self, decay=0.999):
 
@@ -244,14 +248,14 @@ class Trainer:
         }
 
         save_file = os.path.join(
-            self.config.ckpt_path, f"{str(self.iter)}_{self.config.size}.pth"
+            self.cfg.ckpt_path, f"{str(self.iter)}_{self.cfg.size}.pth"
         )
 
         torch.save(save_dict, save_file)
 
     def train(self):
 
-        cfg = self.config
+        cfg = self.cfg
 
         pbar = tqdm(itertools.count(start=self.iter), initial=self.iter, unit="iter")
 
@@ -428,7 +432,7 @@ class Trainer:
                 if is_accum_step:
                     self.g_optimizer.step()
                     self.g_optimizer.zero_grad()
-                    self.model_ema(decay=0.5 ** (cfg.batch / (10 * 1000)))
+                    self.model_ema()
 
             # 统计所有损失和分数
             values = {}
@@ -461,7 +465,7 @@ class Trainer:
                 with torch.no_grad():
                     fake, _, fake_mask = self.net_g_ema(target, z_id)
 
-                    fake = torch.where(fake_mask.bool(), fake, target)
+                    fake = fake * fake_mask + (1 - fake_mask) * target
 
                     fake_mask = (fake_mask.repeat(1, 3, 1, 1) - 0.5) / 0.5
 

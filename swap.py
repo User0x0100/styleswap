@@ -136,18 +136,19 @@ class Swapper:
         pbar = tqdm(range(total_frames), unit="frame")
 
         while cap.isOpened():
-            ret, frame = cap.read()
+            ret, tgt = cap.read()
             if not ret:
                 break
 
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = self._get_align_face(frame).to(self.device)
+            tgt = cv2.cvtColor(tgt, cv2.COLOR_BGR2RGB)
+            tgt = self._get_align_face(tgt).to(self.device)
 
             with torch.no_grad():
-                fake, _, mask = self.net_g(frame, source_id)
+                fake, _, mask = self.net_g(tgt, source_id)
+
                 fake_id = self.arcface(fake)
                 similarity = torch.cosine_similarity(source_id, fake_id).mean()
-                fake = torch.where(mask.bool(), fake, frame)
+                fake = fake * mask + (1 - mask) * tgt
 
             fake = fake.add(1.0).mul(127.5).clamp(0, 255).round().to(torch.uint8)
             fake = fake.permute(0, 2, 3, 1).contiguous()
@@ -176,14 +177,14 @@ if __name__ == "__main__":
     # target = f"/home/liaohaixun/styleswap_data/dateset/vggface2_hq512/{random.randint(0,1160249):06d}.jpg"
     # source = f"/home/liaohaixun/styleswap_data/dateset/vggface2_hq512/{random.randint(0,1160249):06d}.jpg"
 
-    target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
+    # target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-02-17(袁忠 曹属馨)/20230217-160724910曹属馨(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-06-20(邓叮玲 许馨文)/20230620-155807793邓叮玲(电脑录屏).mp4"
-    # target = "/opt/share/deepfake/linshi/录屏素材/2023-08-28(李小姐 邱小姐)/20230828-122302李小姐(电脑录屏).mp4"
+    target = "/opt/share/deepfake/linshi/录屏素材/2023-08-28(李小姐 邱小姐)/20230828-122302李小姐(电脑录屏).mp4"
     # source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/{random.randint(0,69999):05d}.png"
 
     # target = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/25635.png"
     # source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/47125.png"
-    swapper = Swapper("ckpt/1015000_512.pth")
+    swapper = Swapper("ckpt/1140000_512.pth")
     # swapper.swap(target, source, "result.png")
-    swapper.swap_video(target, "jay_c.webp", "result.mp4")
+    swapper.swap_video(target, "IDAssets/liuyifei.png", "result.mp4")

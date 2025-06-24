@@ -253,6 +253,6 @@ class ArcFace(nn.Module):
         self._iresnet.load_state_dict(torch.load(weight, weights_only=True))
 
     def forward(self, x):
-        x = F.interpolate(x, [112, 112], mode="bicubic")
+        x = F.interpolate(x, [112, 112], mode="area")
         id = self._iresnet(x)
         return F.normalize(id, p=2, dim=1)

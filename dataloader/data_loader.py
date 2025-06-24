@@ -152,6 +152,8 @@ class FaceDataset(Dataset):
             hue=hue,
         )
 
+        self.gaussian_blur = transforms.GaussianBlur(kernel_size=5, sigma=(1.5, 2.0))
+
         # 张量化与归一化
         self.to_tensor_norm = transforms.Compose(
             [
@@ -345,7 +347,7 @@ class FaceDataset(Dataset):
         target_path = self._get_random_file_from_dirs(self.target_selector)
         target = (
             Image.open(target_path)
-            .resize([self.size, self.size], resample=Image.Resampling.LANCZOS)
+            .resize([self.size, self.size], resample=Image.Resampling.BOX)
             .convert("RGB")
         )
 
@@ -359,6 +361,9 @@ class FaceDataset(Dataset):
 
         # 4. 颜色抖动仅作用于目标图像
         target = self.color_jitter(target)
+
+        # 对掩码进行高斯模糊形成自然过度
+        target_mask = self.gaussian_blur(target_mask)
 
         # 5. 张量化与归一化
         target = self.to_tensor_norm(target)
@@ -374,7 +379,7 @@ class FaceDataset(Dataset):
             src_path = self._get_random_file_from_dirs(self.source_selector)
             source = (
                 Image.open(src_path)
-                .resize([self.size, self.size], resample=Image.Resampling.LANCZOS)
+                .resize([self.size, self.size], resample=Image.Resampling.BOX)
                 .convert("RGB")
             )
             source = self.source_rand_transforms(source)
