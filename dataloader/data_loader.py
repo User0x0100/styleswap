@@ -371,11 +371,11 @@ class FaceDataset(Dataset):
 
         # 6. 根据权重与概率选择source图像
         if random.random() < self.same_image_prob:
-            is_same = True
+            same = torch.tensor(1.0)
             source = target
 
         else:
-            is_same = False
+            same = torch.tensor(0.0)
             src_path = self._get_random_file_from_dirs(self.source_selector)
             source = (
                 Image.open(src_path)
@@ -385,7 +385,7 @@ class FaceDataset(Dataset):
             source = self.source_rand_transforms(source)
             source = self.to_tensor_norm(source)
 
-        return target, source, target_mask, is_same
+        return target, source, target_mask, same
 
     def refresh_cache(self, specific_dirs: List[str] = None):
         """手动刷新缓存，重新扫描指定目录或所有目录"""

@@ -27,7 +27,7 @@ from dataloader.data_loader import FaceDataset
 # 全局配置
 CONFIG = {
     "size": 512,
-    "checkpoint": "ckpt/1140000_512.pth",
+    "checkpoint": "log/train/ckpt/1185000_512.pth",
     "device": "cuda:0",
     "image_path": ["/home/liaohaixun/styleswap_data/dateset/ffhq_1024"],
     "output_dir": "loss_visualization_output",
