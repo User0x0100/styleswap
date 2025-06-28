@@ -23,7 +23,7 @@ class TrainSet:
     device: torch.device = torch.device("cuda", 0)
     pretrain: None | str = "log/train/ckpt/1194819_512.pth"
 
-    batch: int = 12
+    batch: int = 8
     size: int = 512
     style_dim: int = 512
     n_mlp: int = 8
@@ -41,9 +41,6 @@ class TrainSet:
 
     d_lr: float = 0.0001
     g_lr: float = 0.0001
-
-    d_optimiz_every: int = 1
-    g_optimiz_every: int = 1
 
     base_path: str = "log/train"
     ckpt_dir: str = "ckpt"
@@ -66,8 +63,8 @@ class TrainSet:
     }
     PerceptualLoss_use_input_norm: bool = True
     PerceptualLoss_range_norm: bool = True
-    PerceptualLoss_perceptual_weight: float = 50.0
-    PerceptualLoss_style_weight: float = 50.0
+    PerceptualLoss_perceptual_weight: float = 80.0
+    PerceptualLoss_style_weight: float = 80.0
     PerceptualLoss_criterion: str = "l1"
 
     mask_loss_weight: float = 1.0
@@ -102,12 +99,6 @@ def sample_data(loader):
 
 class Trainer:
     def __init__(self, config: TrainSet):
-
-        config.r1_reg_every = config.r1_reg_every * config.grad_accum_steps
-        config.path_reg_every = config.path_reg_every * config.grad_accum_steps
-
-        config.r1_reg_every = config.r1_reg_every * config.d_optimiz_every
-        config.path_reg_every = config.path_reg_every * config.g_optimiz_every
 
         self.cfg = config
         self.iter = 1
@@ -361,10 +352,6 @@ class Trainer:
 
                 # 路径正则化
                 # if self.iter % cfg.path_reg_every == 0 and i == 0:
-
-                #     fake_img, latents, fake_mask = self.net_g(
-                #         target, z_id, return_latents=True
-                #     )
 
                 #     path_loss, mean_path_length, path_lengths = g_path_regularize(
                 #         fake_img, latents, mean_path_length
