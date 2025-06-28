@@ -50,7 +50,7 @@ class TrainSet:
     d_lr: float = 0.0001
     g_lr: float = 0.0001
 
-    base_path: str = "log/train"
+    base_path: str = "log/train_x"
     ckpt_dir: str = "ckpt"
     sample_dir: str = "sample"
     tb_log_dir: str = "tb_log"
@@ -136,11 +136,13 @@ class Trainer:
                 self.net_d,
                 device_ids=[self.cfg.device.index],
                 output_device=self.cfg.device.index,
+                broadcast_buffers=False,
             )
             self.net_g = DDP(
                 self.net_g,
                 device_ids=[self.cfg.device.index],
                 output_device=self.cfg.device.index,
+                broadcast_buffers=False,
             )
 
         if self.cfg.pretrain is not None:
@@ -237,7 +239,7 @@ class Trainer:
             dataset,
             batch_size=self.cfg.batch,
             shuffle=True,
-            num_workers=4,
+            num_workers=2,
             drop_last=True,
             pin_memory=True,
             pin_memory_device=str(self.cfg.device),
@@ -297,6 +299,27 @@ class Trainer:
         mask = mask.to(cfg.device)
         same = same.to(cfg.device)
         return target, source, mask, same
+
+    def reduce_loss_dict(self):
+
+        if not self.cfg.is_distributed:
+            return
+
+        world_size = dist.get_world_size()
+
+        if world_size < 2:
+            return
+
+        with torch.no_grad():
+
+            sorted_items = sorted(self.loss_dict.items())
+            keys, losses = zip(*sorted_items) if sorted_items else ([], [])
+
+            losses_tensor = torch.stack(losses, dim=0)
+            dist.reduce(losses_tensor, op=dist.ReduceOp.SUM, dst=0)
+            if self.cfg.device.index == 0:
+                losses_tensor /= world_size
+                self.loss_dict.update(zip(keys, losses_tensor))
 
     def train(self):
 
@@ -418,7 +441,11 @@ class Trainer:
 
             self.g_optimizer.step()
             self.g_optimizer.zero_grad()
-            self.model_ema()
+            if cfg.device.index == 0:
+                self.model_ema()
+
+            if self.iter % 10 == 0:
+                self.reduce_loss_dict()
 
             if cfg.device.index == 0:
                 # 统计所有损失和分数
@@ -468,23 +495,24 @@ if __name__ == "__main__":
 
     cfg = TrainSet()
 
-    world_size = dist.get_world_size()
+    cfg.batch = 2
+
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+
     is_distributed = world_size > 1
 
     if is_distributed:
-        print("多卡训练")
-        device_id = torch.distributed.get_node_local_rank()
+        local_rank = int(os.environ["LOCAL_RANK"])
+        print(f"分布式训练: world_size={world_size}, local_rank={local_rank}")
         torch.distributed.init_process_group(
-            backend="nccl",
-            init_method="env://",
-            world_size=world_size,
+            backend="nccl", init_method="env://", world_size=world_size
         )
-        cfg.device = torch.device(DEVICE_TYPE, device_id)
-        cfg.is_distributed = True
+        cfg.device = torch.device(DEVICE_TYPE, local_rank)
+        cfg.is_distributed = is_distributed
     else:
         print("单卡训练")
         cfg.device = torch.device(DEVICE_TYPE, 0)
-        cfg.is_distributed = False
+        cfg.is_distributed = is_distributed
 
     trainer = Trainer(cfg)
     try:
