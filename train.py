@@ -233,16 +233,10 @@ class Trainer:
             same_image_prob=self.cfg.same_image_prob,
         )
 
-        sampler = None
-        if self.cfg.is_distributed:
-            sampler = torch.utils.data.distributed.DistributedSampler(
-                dataset, shuffle=True, drop_last=True
-            )
         loader = DataLoader(
             dataset,
             batch_size=self.cfg.batch,
-            shuffle=(sampler is None),
-            sampler=sampler,
+            shuffle=True,
             num_workers=4,
             drop_last=True,
             pin_memory=True,
