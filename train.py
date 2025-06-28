@@ -14,14 +14,22 @@ from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from dataloader.data_loader import FaceDataset
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 
-assert torch.cuda.is_available()
+
+DEVICE_TYPE = "cuda"
+
+if DEVICE_TYPE == "cuda":
+    assert torch.cuda.is_available()
 
 
 class TrainSet:
 
-    device: torch.device = torch.device("cuda", 0)
-    pretrain: None | str = "log/train/ckpt/1194819_512.pth"
+    device: torch.device = torch.device(DEVICE_TYPE, 0)
+    is_distributed: bool = False
+
+    pretrain: None | str = None
 
     batch: int = 8
     size: int = 512
@@ -123,6 +131,18 @@ class Trainer:
             isconcat=self.cfg.isconcat,
         ).to(self.cfg.device)
 
+        if self.cfg.is_distributed:
+            self.net_d = DDP(
+                self.net_d,
+                device_ids=[self.cfg.device.index],
+                output_device=self.cfg.device.index,
+            )
+            self.net_g = DDP(
+                self.net_g,
+                device_ids=[self.cfg.device.index],
+                output_device=self.cfg.device.index,
+            )
+
         if self.cfg.pretrain is not None:
             print(f"Loading pretrain checkpoint from {self.cfg.pretrain}")
 
@@ -144,14 +164,25 @@ class Trainer:
         self.net_g.train()
         self.net_g_ema.eval()
 
+        net_d_params = (
+            self.net_d.module.parameters()
+            if self.cfg.is_distributed
+            else self.net_d.parameters()
+        )
+        net_g_params = (
+            self.net_g.module.parameters()
+            if self.cfg.is_distributed
+            else self.net_g.parameters()
+        )
+
         self.d_optimizer = torch.optim.Adam(
-            params=self.net_d.parameters(),
+            params=net_d_params,
             lr=self.cfg.d_lr,
             betas=(0.0, 0.99),
         )
 
         self.g_optimizer = torch.optim.Adam(
-            params=self.net_g.parameters(),
+            params=net_g_params,
             lr=self.cfg.g_lr,
             betas=(0.0, 0.99),
         )
@@ -202,10 +233,16 @@ class Trainer:
             same_image_prob=self.cfg.same_image_prob,
         )
 
+        sampler = None
+        if self.cfg.is_distributed:
+            sampler = torch.utils.data.distributed.DistributedSampler(
+                dataset, shuffle=True, drop_last=True
+            )
         loader = DataLoader(
             dataset,
             batch_size=self.cfg.batch,
-            shuffle=True,
+            shuffle=(sampler is None),
+            sampler=sampler,
             num_workers=4,
             drop_last=True,
             pin_memory=True,
@@ -216,11 +253,16 @@ class Trainer:
         )
         self.loader = sample_data(loader)
 
-        self.writer = SummaryWriter(log_dir=self.tb_log_dir)
+        if self.cfg.device.index == 0:
+            self.writer = SummaryWriter(log_dir=self.tb_log_dir)
 
     def model_ema(self, decay=0.999):
 
-        net_g_params = dict(self.net_g.named_parameters())
+        if self.cfg.is_distributed:
+            net_g_params = dict(self.net_g.module.named_parameters())
+        else:
+            net_g_params = dict(self.net_g.named_parameters())
+
         net_g_ema_params = dict(self.net_g_ema.named_parameters())
 
         for k in net_g_ema_params.keys():
@@ -229,10 +271,20 @@ class Trainer:
             )
 
     def save(self):
+
+        cfg = self.cfg
+
+        if cfg.is_distributed:
+            d = self.net_d.module
+            g = self.net_g.module
+        else:
+            d = self.net_d
+            g = self.net_g
+
         save_dict = {
             "iter": self.iter,
-            "d": self.net_d.state_dict(),
-            "g": self.net_g.state_dict(),
+            "d": d.state_dict(),
+            "g": g.state_dict(),
             "g_ema": self.net_g_ema.state_dict(),
             "d_optim": self.d_optimizer.state_dict(),
             "g_optim": self.g_optimizer.state_dict(),
@@ -255,8 +307,12 @@ class Trainer:
     def train(self):
 
         cfg = self.cfg
-
-        pbar = tqdm(itertools.count(start=self.iter), initial=self.iter, unit="iter")
+        if cfg.device.index == 0:
+            pbar = tqdm(
+                itertools.count(start=self.iter), initial=self.iter, unit="iter"
+            )
+        else:
+            pbar = itertools.count(start=self.iter)
 
         # mean_path_length = 0
 
@@ -370,56 +426,81 @@ class Trainer:
             self.g_optimizer.zero_grad()
             self.model_ema()
 
-            # 统计所有损失和分数
-            values = {}
-            for k, v in self.loss_dict.items():
-                # v 可能是张量或元组
-                if isinstance(v, tuple):
-                    v = v[0]
-                if torch.is_tensor(v):
-                    values[k] = v.mean().item()
-                else:
-                    values[k] = float(v)
+            if cfg.device.index == 0:
+                # 统计所有损失和分数
+                values = {}
+                for k, v in self.loss_dict.items():
+                    # v 可能是张量或元组
+                    if isinstance(v, tuple):
+                        v = v[0]
+                    if torch.is_tensor(v):
+                        values[k] = v.mean().item()
+                    else:
+                        values[k] = float(v)
 
-            # 记录到Tensorboard
-            for k, v in values.items():
-                self.writer.add_scalar(f"Loss/{k}", v, self.iter)
+                # 记录到Tensorboard
+                for k, v in values.items():
+                    self.writer.add_scalar(f"Loss/{k}", v, self.iter)
 
-            # 定期保存样本和日志
-            if self.iter % cfg.save_samples_every == 0:
+                # 定期保存样本和日志
+                if self.iter % cfg.save_samples_every == 0:
 
-                # 生成样本图像
-                with torch.no_grad():
-                    fake, _, fake_mask = self.net_g_ema(target, z_id)
-                    fake = fake * fake_mask + (1 - fake_mask) * target
-                    fake_mask = (fake_mask.repeat(1, 3, 1, 1) - 0.5) / 0.5
-                    mask = (mask.repeat(1, 3, 1, 1) - 0.5) / 0.5
-                    grid = torch.cat((target, source, fake, fake_mask, mask), 0)
-                    save_file = os.path.join(
-                        self.sample_dir, f"{str(self.iter)}_{cfg.size}.png"
-                    )
+                    # 生成样本图像
+                    with torch.no_grad():
+                        fake, _, fake_mask = self.net_g_ema(target, z_id)
+                        fake = fake * fake_mask + (1 - fake_mask) * target
+                        fake_mask = (fake_mask.repeat(1, 3, 1, 1) - 0.5) / 0.5
+                        mask = (mask.repeat(1, 3, 1, 1) - 0.5) / 0.5
+                        grid = torch.cat((target, source, fake, fake_mask, mask), 0)
+                        save_file = os.path.join(
+                            self.sample_dir, f"{str(self.iter)}_{cfg.size}.png"
+                        )
 
-                    # 保存样本图像
-                    utils.save_image(
-                        grid,
-                        save_file,
-                        nrow=cfg.batch,
-                        normalize=True,
-                        value_range=(-1, 1),
-                    )
+                        # 保存样本图像
+                        utils.save_image(
+                            grid,
+                            save_file,
+                            nrow=cfg.batch,
+                            normalize=True,
+                            value_range=(-1, 1),
+                        )
 
-            # 定期保存模型
-            if self.iter % cfg.save_ckpt_every == 0:
-                self.save()
+                # 定期保存模型
+                if self.iter % cfg.save_ckpt_every == 0:
+                    self.save()
 
 
 if __name__ == "__main__":
 
     cfg = TrainSet()
+
+    world_size = dist.get_world_size()
+    is_distributed = world_size > 1
+
+    if is_distributed:
+        print("多卡训练")
+        device_id = torch.distributed.get_node_local_rank()
+        torch.distributed.init_process_group(
+            backend="nccl",
+            init_method="env://",
+            world_size=world_size,
+        )
+        cfg.device = torch.device(DEVICE_TYPE, device_id)
+        cfg.is_distributed = True
+    else:
+        print("单卡训练")
+        cfg.device = torch.device(DEVICE_TYPE, 0)
+        cfg.is_distributed = False
+
     trainer = Trainer(cfg)
     try:
         trainer.train()
     finally:
-        trainer.save()
-        trainer.writer.close()
+        if trainer.cfg.is_distributed:
+            torch.distributed.barrier()
+        if trainer.cfg.device.index == 0:
+            trainer.save()
+            trainer.writer.close()
+            dist.destroy_process_group()
+
         torch.cuda.empty_cache()
