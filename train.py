@@ -5,10 +5,17 @@ from torchvision import utils
 from pathlib import Path
 import torch
 from torch import nn
+import numpy as np
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LinearLR
 from losses.arcface import ArcFace
 from model import FullGenerator, StyleGAN2Discriminator
+from unetdisc import (
+    U_Net_Discriminator,
+    gradient_penalty,
+    calc_pl_lengths,
+    update_average,
+)
 from losses import GANLoss, L1Loss, PerceptualLoss, r1_penalty, g_path_regularize
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
@@ -21,9 +28,9 @@ assert torch.cuda.is_available()
 class TrainSet:
 
     device: torch.device = torch.device("cuda", 0)
-    pretrain: None | str = "log/train/ckpt/1194819_512.pth"
+    pretrain: None | str = "log/train_unet/ckpt/74373_512.pth"
 
-    batch: int = 12
+    batch: int = 8
     size: int = 512
     style_dim: int = 512
     n_mlp: int = 8
@@ -42,19 +49,15 @@ class TrainSet:
     d_lr: float = 0.0001
     g_lr: float = 0.0001
 
-    d_optimiz_every: int = 1
-    g_optimiz_every: int = 1
-
-    base_path: str = "log/train"
+    base_path: str = "log/train_unet"
     ckpt_dir: str = "ckpt"
     sample_dir: str = "sample"
     tb_log_dir: str = "tb_log"
 
-    id_loss_weight: float = 4.0
+    id_loss_weight: float = 5.0
 
     pixel_rec_weight: float = 100.0
 
-    gan_type: str = "wgan_softplus"
     gan_loss_weight: float = 1.0
 
     PerceptualLoss_loss_type: str = "vgg19"
@@ -66,8 +69,8 @@ class TrainSet:
     }
     PerceptualLoss_use_input_norm: bool = True
     PerceptualLoss_range_norm: bool = True
-    PerceptualLoss_perceptual_weight: float = 50.0
-    PerceptualLoss_style_weight: float = 50.0
+    PerceptualLoss_perceptual_weight: float = 100.0
+    PerceptualLoss_style_weight: float = 100.0
     PerceptualLoss_criterion: str = "l1"
 
     mask_loss_weight: float = 1.0
@@ -103,12 +106,6 @@ def sample_data(loader):
 class Trainer:
     def __init__(self, config: TrainSet):
 
-        config.r1_reg_every = config.r1_reg_every * config.grad_accum_steps
-        config.path_reg_every = config.path_reg_every * config.grad_accum_steps
-
-        config.r1_reg_every = config.r1_reg_every * config.d_optimiz_every
-        config.path_reg_every = config.path_reg_every * config.g_optimiz_every
-
         self.cfg = config
         self.iter = 1
 
@@ -117,7 +114,8 @@ class Trainer:
         torch.backends.cudnn.benchmark = True
 
         self.loss_dict = {}
-        self.net_d = StyleGAN2Discriminator(out_size=self.cfg.size).to(self.cfg.device)
+
+        self.net_d = U_Net_Discriminator(image_size=self.cfg.size).to(self.cfg.device)
 
         self.net_g = FullGenerator(
             self.cfg.size,
@@ -185,10 +183,6 @@ class Trainer:
         Path(self.ckpt_dir).mkdir(exist_ok=True, parents=True)
         Path(self.sample_dir).mkdir(exist_ok=True, parents=True)
         Path(self.tb_log_dir).mkdir(exist_ok=True, parents=True)
-
-        self.gan_loss = GANLoss(
-            self.cfg.gan_type, loss_weight=self.cfg.gan_loss_weight
-        ).to(self.cfg.device)
 
         self.perceptualLoss = PerceptualLoss(
             self.cfg.PerceptualLoss_layer_weights,
@@ -267,7 +261,7 @@ class Trainer:
 
         pbar = tqdm(itertools.count(start=self.iter), initial=self.iter, unit="iter")
 
-        # mean_path_length = 0
+        # pl_mean = 0
 
         # 主训练循环
         for self.iter in pbar:
@@ -277,34 +271,39 @@ class Trainer:
 
                 target, source, mask, same = self.fetch_training_batch()
 
+                # 提取身份特征
                 z_id = self.arcface(source)
 
                 self.net_d.requires_grad_(True)
                 self.net_g.requires_grad_(False)
 
                 fake_img, _, _ = self.net_g(target, z_id.detach())
-                fake_pred = self.net_d(fake_img.detach())
+                fake_enc_out, fake_dec_out = self.net_d(fake_img.detach())
 
                 target.requires_grad_(True)
-                real_pred = self.net_d(target)
+                real_enc_out, real_dec_out = self.net_d(target)
 
-                d_loss = (
-                    self.gan_loss(real_pred, True, is_disc=True)
-                    + self.gan_loss(fake_pred, False, is_disc=True)
-                ) / cfg.grad_accum_steps
+                enc_divergence = (
+                    F.relu(1 + real_enc_out) + F.relu(1 - fake_enc_out)
+                ).mean()
+                dec_divergence = (
+                    F.relu(1 + real_dec_out) + F.relu(1 - fake_dec_out)
+                ).mean()
+                divergence = enc_divergence + dec_divergence * cfg.gan_loss_weight
 
-                self.loss_dict["D"] = d_loss.detach()
-                self.loss_dict["real_score"] = real_pred.detach().mean()
-                self.loss_dict["fake_score"] = fake_pred.detach().mean()
+                self.loss_dict["D"] = divergence.detach().mean()
+                self.loss_dict["fake_enc_out"] = fake_enc_out.detach().mean()
+                self.loss_dict["fake_dec_out"] = fake_dec_out.detach().mean()
+                self.loss_dict["real_enc_out"] = real_enc_out.detach().mean()
+                self.loss_dict["real_dec_out"] = real_dec_out.detach().mean()
 
                 if self.iter % cfg.r1_reg_every == 0 and i == 0:
 
-                    r1 = r1_penalty(real_pred, target)
-                    r1 = cfg.r1_reg_weight / 2 * r1 * cfg.r1_reg_every
-                    d_loss += r1
-                    self.loss_dict["r1"] = r1.detach().mean()
+                    gp = gradient_penalty(target, (real_enc_out,))
+                    divergence += gp
+                    self.loss_dict["gp"] = gp.detach().mean()
 
-                d_loss.backward()
+                divergence.backward()
 
             self.d_optimizer.step()
             self.d_optimizer.zero_grad()
@@ -322,10 +321,10 @@ class Trainer:
 
                 # 生成假图像
                 fake_img, _, fake_mask = self.net_g(target, z_id)
-                fake_pred = self.net_d(fake_img)
+                fake_enc_output, fake_dec_output = self.net_d(fake_img)
 
                 # ------------- 对抗损失 -------------
-                g_loss = self.gan_loss(fake_pred, True, is_disc=False)
+                g_loss = fake_enc_output.mean() + F.relu(1 + fake_dec_output).mean()
                 self.loss_dict["G"] = g_loss.detach()
 
                 # ------------- 身份损失 -------------
@@ -356,25 +355,17 @@ class Trainer:
                 self.loss_dict["Mask"] = mask_loss.detach()
                 g_loss += mask_loss * cfg.mask_loss_weight
 
-                # ------------- 总损失 -------------
                 g_loss = g_loss / cfg.grad_accum_steps
 
-                # 路径正则化
                 # if self.iter % cfg.path_reg_every == 0 and i == 0:
 
-                #     fake_img, latents, fake_mask = self.net_g(
-                #         target, z_id, return_latents=True
-                #     )
-
-                #     path_loss, mean_path_length, path_lengths = g_path_regularize(
-                #         fake_img, latents, mean_path_length
-                #     )
-                #     weighted_path_loss = (
-                #         cfg.path_reg_weight * cfg.path_reg_every * path_loss
-                #     )
-                #     g_loss += weighted_path_loss
-                #     self.loss_dict["path_loss"] = path_loss
-                #     self.loss_dict["path_lengths"] = path_lengths.mean()
+                #     pl_lengths = calc_pl_lengths(latents, fake_img)
+                #     avg_pl_length = np.mean(pl_lengths.detach().cpu().numpy())
+                #     pl_mean = update_average(pl_mean, avg_pl_length)
+                #     pl_loss = ((pl_lengths - pl_mean) ** 2).mean()
+                #     g_loss += pl_loss
+                #     self.loss_dict["pl_loss"] = pl_loss.detach().mean()
+                #     self.loss_dict["pl_lengths"] = pl_lengths.detach().mean()
 
                 # 反向传播
                 g_loss.backward()

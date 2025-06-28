@@ -43,7 +43,7 @@ class Swapper:
             providers=["CUDAExecutionProvider"],
             allowed_modules=["detection"],
         )
-        self.detector.prepare(ctx_id=0, det_thresh=0.13, det_size=(640, 640))
+        self.detector.prepare(ctx_id=0, det_thresh=0.2, det_size=(640, 640))
 
         # Preprocessing pipeline
         self.preproc = transforms.Compose(
@@ -177,14 +177,14 @@ if __name__ == "__main__":
     # target = f"/home/liaohaixun/styleswap_data/dateset/vggface2_hq512/{random.randint(0,1160249):06d}.jpg"
     # source = f"/home/liaohaixun/styleswap_data/dateset/vggface2_hq512/{random.randint(0,1160249):06d}.jpg"
 
-    # target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
+    target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-02-17(袁忠 曹属馨)/20230217-160724910曹属馨(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-06-20(邓叮玲 许馨文)/20230620-155807793邓叮玲(电脑录屏).mp4"
-    target = "/opt/share/deepfake/linshi/录屏素材/2023-08-28(李小姐 邱小姐)/20230828-122302李小姐(电脑录屏).mp4"
+    # target = "/opt/share/deepfake/linshi/录屏素材/2023-08-28(李小姐 邱小姐)/20230828-122302李小姐(电脑录屏).mp4"
     # source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/{random.randint(0,69999):05d}.png"
 
     # target = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/25635.png"
     # source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/47125.png"
-    swapper = Swapper("ckpt/1140000_512.pth")
+    swapper = Swapper("log/train_unet/ckpt/80000_512.pth")
     # swapper.swap(target, source, "result.png")
-    swapper.swap_video(target, "IDAssets/liuyifei.png", "result.mp4")
+    swapper.swap_video(target, "IDAssets/Harry_Potter_character_poster.jpg", "result.mp4")
