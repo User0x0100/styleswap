@@ -1,8 +1,10 @@
 #!/bin/bash
 
 # export TORCH_CUDA_ARCH_LIST='8.0'
-export CUDA_VISIBLE_DEVICES="$1"
+export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
-clear && python train.py
+
+torchrun --nproc_per_node 8 train.py
+# clear && python train.py
