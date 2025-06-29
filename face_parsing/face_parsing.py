@@ -42,12 +42,12 @@ class FaceParsing:
             out = self.net(image)
             parsing = out.argmax(dim=1)
 
-        masks = torch.isin(parsing, self.parts_idx_tensor)  # 检查像素是否属于指定类别
-        masks = masks.float() * 255  # 转换为浮点数并缩放
+            masks = torch.isin(parsing, self.parts_idx_tensor)  # 检查像素是否属于指定类别
+            masks = masks.float() * 255  # 转换为浮点数并缩放
 
-        # 将结果移至 CPU 并转换为图像
-        masks = masks.cpu().numpy().astype(np.uint8)[0]
-        return Image.fromarray(masks)
+            # 将结果移至 CPU 并转换为图像
+            masks = masks.cpu().numpy().astype(np.uint8)[0]
+            return Image.fromarray(masks)
 
 
 if __name__ == "__main__":

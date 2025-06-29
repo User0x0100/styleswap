@@ -50,7 +50,7 @@ class TrainSet:
     d_lr: float = 0.0001
     g_lr: float = 0.0001
 
-    base_path: str = "log/train_x"
+    base_path: str = "log/train"
     ckpt_dir: str = "ckpt"
     sample_dir: str = "sample"
     tb_log_dir: str = "tb_log"
@@ -79,23 +79,23 @@ class TrainSet:
 
     same_image_prob: float = 0.15
 
-    # "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
-    # "/home/liaohaixun/styleswap_data/dateset/CelebAHQ-1024x1024",
-    # "/home/liaohaixun/styleswap_data/dateset/vggface2_hq512",
-    # "filter_results/closed_eyes"
-    # "filter_results/large_angle"
+    # "/opt/share/deepfake/dataset_1/ffhq_1024",
+    # "/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024",
+    # "/opt/share/deepfake/dataset_1/vggface2_hq512",
+    # "/opt/share/deepfake/dataset_1/closed_eyes"
+    # "/opt/share/deepfake/dataset_1/large_angle"
 
     image_path = None
 
     target_dirs = [
-        ("/home/liaohaixun/styleswap_data/dateset/ffhq_1024", 0.25),
-        ("/home/liaohaixun/styleswap_data/dateset/CelebAHQ-1024x1024", 0.25),
-        ("filter_results/closed_eyes", 0.25),
-        ("filter_results/large_angle", 0.25),
+        ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.25),
+        ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.25),
+        ("/opt/share/deepfake/dataset_1/closed_eyes", 0.25),
+        ("/opt/share/deepfake/dataset_1/large_angle", 0.25),
     ]
     source_dirs = [
-        ("/home/liaohaixun/styleswap_data/dateset/ffhq_1024", 0.5),
-        ("/home/liaohaixun/styleswap_data/dateset/CelebAHQ-1024x1024", 0.5),
+        ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.5),
+        ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.5),
     ]
 
 
@@ -131,20 +131,6 @@ class Trainer:
             isconcat=self.cfg.isconcat,
         ).to(self.cfg.device)
 
-        if self.cfg.is_distributed:
-            self.net_d = DDP(
-                self.net_d,
-                device_ids=[self.cfg.device.index],
-                output_device=self.cfg.device.index,
-                broadcast_buffers=False,
-            )
-            self.net_g = DDP(
-                self.net_g,
-                device_ids=[self.cfg.device.index],
-                output_device=self.cfg.device.index,
-                broadcast_buffers=False,
-            )
-
         if self.cfg.pretrain is not None:
             print(f"Loading pretrain checkpoint from {self.cfg.pretrain}")
 
@@ -165,6 +151,20 @@ class Trainer:
         self.net_d.train()
         self.net_g.train()
         self.net_g_ema.eval()
+
+        if self.cfg.is_distributed:
+            self.net_d = DDP(
+                self.net_d,
+                device_ids=[self.cfg.device.index],
+                output_device=self.cfg.device.index,
+                broadcast_buffers=False,
+            )
+            self.net_g = DDP(
+                self.net_g,
+                device_ids=[self.cfg.device.index],
+                output_device=self.cfg.device.index,
+                broadcast_buffers=False,
+            )
 
         net_d_params = (
             self.net_d.module.parameters()
@@ -254,11 +254,8 @@ class Trainer:
 
     def model_ema(self, decay=0.999):
 
-        if self.cfg.is_distributed:
-            net_g_params = dict(self.net_g.module.named_parameters())
-        else:
-            net_g_params = dict(self.net_g.named_parameters())
-
+        net_g_params = self.net_g.module if self.cfg.is_distributed else self.net_g
+        net_g_params = dict(net_g_params.named_parameters())
         net_g_ema_params = dict(self.net_g_ema.named_parameters())
 
         for k in net_g_ema_params.keys():
@@ -337,19 +334,23 @@ class Trainer:
         for self.iter in pbar:
 
             # =============== 训练判别器 ===============
+            self.net_d.requires_grad_(True)
+            self.net_g.requires_grad_(False)
+            self.d_optimizer.zero_grad()
             for i in range(cfg.grad_accum_steps):
 
                 target, source, mask, same = self.fetch_training_batch()
+                is_r1_reg_every = self.iter % cfg.r1_reg_every == 0 and i == 0
 
-                z_id = self.arcface(source)
+                with torch.no_grad():
+                    z_id = self.arcface(source)
+                    fake_img, _, _ = self.net_g(target, z_id)
 
-                self.net_d.requires_grad_(True)
-                self.net_g.requires_grad_(False)
+                fake_pred = self.net_d(fake_img)
 
-                fake_img, _, _ = self.net_g(target, z_id.detach())
-                fake_pred = self.net_d(fake_img.detach())
+                if is_r1_reg_every:
+                    target.requires_grad_(True)
 
-                target.requires_grad_(True)
                 real_pred = self.net_d(target)
 
                 d_loss = (
@@ -361,7 +362,7 @@ class Trainer:
                 self.loss_dict["real_score"] = real_pred.detach().mean()
                 self.loss_dict["fake_score"] = fake_pred.detach().mean()
 
-                if self.iter % cfg.r1_reg_every == 0 and i == 0:
+                if is_r1_reg_every:
 
                     r1 = r1_penalty(real_pred, target)
                     r1 = cfg.r1_reg_weight / 2 * r1 * cfg.r1_reg_every
@@ -371,28 +372,26 @@ class Trainer:
                 d_loss.backward()
 
             self.d_optimizer.step()
-            self.d_optimizer.zero_grad()
 
             # =============== 训练生成器 ===============
+            self.net_d.requires_grad_(False)
+            self.net_g.requires_grad_(True)
+            self.g_optimizer.zero_grad()
             for i in range(cfg.grad_accum_steps):
 
                 target, source, mask, same = self.fetch_training_batch()
+                with torch.no_grad():
+                    z_id = self.arcface(source)
 
-                # 提取身份特征
-                z_id = self.arcface(source)
-
-                self.net_d.requires_grad_(False)
-                self.net_g.requires_grad_(True)
-
-                # 生成假图像
                 fake_img, _, fake_mask = self.net_g(target, z_id)
-                fake_pred = self.net_d(fake_img)
 
                 # ------------- 对抗损失 -------------
+                fake_pred = self.net_d(fake_img)
                 g_loss = self.gan_loss(fake_pred, True, is_disc=False)
                 self.loss_dict["G"] = g_loss.detach()
 
                 # ------------- 身份损失 -------------
+
                 fake_z_id = self.arcface(fake_img)
                 id_loss = (1 - torch.cosine_similarity(fake_z_id, z_id)).mean()
                 self.loss_dict["ID"] = id_loss.detach()
@@ -440,7 +439,7 @@ class Trainer:
                 g_loss.backward()
 
             self.g_optimizer.step()
-            self.g_optimizer.zero_grad()
+
             if cfg.device.index == 0:
                 self.model_ema()
 
@@ -494,8 +493,8 @@ class Trainer:
 if __name__ == "__main__":
 
     cfg = TrainSet()
-
-    cfg.batch = 2
+    cfg.batch = 1
+    cfg.pretrain = "75000_512.pth"
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
 
