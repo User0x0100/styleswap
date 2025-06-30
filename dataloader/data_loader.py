@@ -1,6 +1,5 @@
 import os
 import json
-import hashlib
 import random
 from typing import List, Union, Tuple, Optional
 import torch
@@ -59,13 +58,13 @@ class FaceDataset(Dataset):
         ] = None,  # source专用目录
         cache_file: str = "dataset_cache.json",  # 缓存文件路径
         validate_cache: bool = False,
-        same_image_prob: float = 0.25,  # target与source为同一张图片的概率
+        same_image_prob: float = 0.1,  # target与source为同一张图片的概率
         flip_prob: float = 0.5,
         brightness: float = 0.4,
         contrast: float = 0.4,
         saturation: float = 0.4,
         hue: float = 0.04,
-        device: str = "cuda:0",  # GPU设备
+        device: torch.device = torch.device("cuda", 0),  # GPU设备
     ):
         self.size = size
         self.cache_file = cache_file

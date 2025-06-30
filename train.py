@@ -153,12 +153,15 @@ class Trainer:
         self.net_g_ema.eval()
 
         if self.cfg.is_distributed:
+
+            self.net_d = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.net_d)
             self.net_d = DDP(
                 self.net_d,
                 device_ids=[self.cfg.device.index],
                 output_device=self.cfg.device.index,
                 broadcast_buffers=False,
             )
+            self.net_g = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.net_g)
             self.net_g = DDP(
                 self.net_g,
                 device_ids=[self.cfg.device.index],
@@ -189,15 +192,15 @@ class Trainer:
             betas=(0.0, 0.99),
         )
 
-        if self.cfg.pretrain is not None:
-            self.d_optimizer.load_state_dict(checkpoint["d_optim"])
-            for param_group in self.d_optimizer.param_groups:
-                param_group["lr"] = self.cfg.d_lr
+        # if self.cfg.pretrain is not None:
+        #     self.d_optimizer.load_state_dict(checkpoint["d_optim"])
+        #     for param_group in self.d_optimizer.param_groups:
+        #         param_group["lr"] = self.cfg.d_lr
 
-            self.g_optimizer.load_state_dict(checkpoint["g_optim"])
-            for param_group in self.g_optimizer.param_groups:
-                param_group["lr"] = self.cfg.g_lr
-            print("Optimizer state loaded from checkpoint.")
+        #     self.g_optimizer.load_state_dict(checkpoint["g_optim"])
+        #     for param_group in self.g_optimizer.param_groups:
+        #         param_group["lr"] = self.cfg.g_lr
+        #     print("Optimizer state loaded from checkpoint.")
 
         print(f"d_optimizer_lr: {self.d_optimizer.param_groups[0]["lr"]}")
         print(f"g_optimizer_lr: {self.g_optimizer.param_groups[0]["lr"]}")
@@ -233,6 +236,7 @@ class Trainer:
             target_dirs=self.cfg.target_dirs,
             source_dirs=self.cfg.source_dirs,
             same_image_prob=self.cfg.same_image_prob,
+            device=self.cfg.device,
         )
 
         loader = DataLoader(
@@ -391,7 +395,6 @@ class Trainer:
                 self.loss_dict["G"] = g_loss.detach()
 
                 # ------------- 身份损失 -------------
-
                 fake_z_id = self.arcface(fake_img)
                 id_loss = (1 - torch.cosine_similarity(fake_z_id, z_id)).mean()
                 self.loss_dict["ID"] = id_loss.detach()
@@ -493,8 +496,9 @@ class Trainer:
 if __name__ == "__main__":
 
     cfg = TrainSet()
-    cfg.batch = 1
-    cfg.pretrain = "75000_512.pth"
+    cfg.batch = 2
+    cfg.grad_accum_steps = 2
+    cfg.pretrain = "sig_d.pth"
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
 
