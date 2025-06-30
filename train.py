@@ -496,8 +496,7 @@ class Trainer:
 if __name__ == "__main__":
 
     cfg = TrainSet()
-    cfg.batch = 1
-    cfg.pretrain = "75000_512.pth"
+    cfg.pretrain = "log/train_unet/ckpt/350000_512.pth"
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
 
