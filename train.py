@@ -77,7 +77,7 @@ class TrainSet:
 
     mask_loss_weight: float = 1.0
 
-    same_image_prob: float = 0.15
+    same_image_prob: float = 0.1
 
     # "/opt/share/deepfake/dataset_1/ffhq_1024",
     # "/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024",
@@ -401,10 +401,6 @@ class Trainer:
                 g_loss += id_loss * cfg.id_loss_weight
 
                 # ------------- 感知损失 -------------
-                au_loss = self.au_loss(fake_img, target)
-                g_loss += au_loss
-                self.loss_dict["AU_loss"] = au_loss.detach()
-
                 percep_loss, style_loss = self.perceptualLoss(fake_img, target)
                 if percep_loss is not None:
                     g_loss += percep_loss
@@ -412,6 +408,12 @@ class Trainer:
                 if style_loss is not None:
                     g_loss += style_loss
                     self.loss_dict["Style"] = style_loss.detach()
+
+                # ------------- FACS -------------
+                if self.iter > 15000:
+                    au_loss = self.au_loss(fake_img, target)
+                    g_loss += au_loss
+                    self.loss_dict["AU"] = au_loss.detach()
 
                 # ------------- 启发式误差识别细化(FaceShifter) -------------
                 err_per_sample = torch.abs(fake_img - target).mean(dim=(1, 2, 3))
@@ -500,12 +502,8 @@ class Trainer:
 if __name__ == "__main__":
 
     cfg = TrainSet()
-    cfg.batch = 2
-    cfg.grad_accum_steps = 2
-    cfg.pretrain = "log/train/ckpt/1222506_512.pth"
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
-
     is_distributed = world_size > 1
 
     if is_distributed:

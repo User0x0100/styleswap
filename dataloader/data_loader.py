@@ -73,8 +73,7 @@ class FaceDataset(Dataset):
         self.flip_prob = flip_prob
         self.same_image_prob = same_image_prob
 
-        # 初始化人脸解析器 默认输出尺寸: 512
-        self.face_parsing = FaceParsing(device)
+        self.face_parsing = FaceParsing().to(device)
 
         # 解析目录配置
         self.image_dirs_config = (

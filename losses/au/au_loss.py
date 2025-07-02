@@ -52,7 +52,9 @@ class OpenGraphAU(nn.Module):
 class AULoss(nn.Module):
     def __init__(self, weight: float = 1.0):
         super().__init__()
-        self.open_graph_au = OpenGraphAU().requires_grad_(False)
+        self.open_graph_au = OpenGraphAU()
+        self.open_graph_au.requires_grad_(False)
+        self.open_graph_au.eval()
         self.weight = weight
 
     def forward(self, fake, real):
