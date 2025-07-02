@@ -16,7 +16,7 @@ from tqdm import tqdm
 from dataloader.data_loader import FaceDataset
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+from losses.au import AULoss
 
 DEVICE_TYPE = "cuda"
 
@@ -50,29 +50,29 @@ class TrainSet:
     d_lr: float = 0.0001
     g_lr: float = 0.0001
 
-    base_path: str = "log/train"
+    base_log_path: str = "log/train"
     ckpt_dir: str = "ckpt"
     sample_dir: str = "sample"
     tb_log_dir: str = "tb_log"
 
     id_loss_weight: float = 4.0
 
-    pixel_rec_weight: float = 100.0
+    pixel_rec_weight: float = 1.0
 
     gan_type: str = "wgan_softplus"
     gan_loss_weight: float = 1.0
 
+    au_loss_weight: float = 1.0
+
     PerceptualLoss_loss_type: str = "vgg19"
     PerceptualLoss_layer_weights: dict[str, float] = {
-        # "conv3_4": 1.0,
-        # "relu3_4": 1.0,
-        # "relu4_3": 1.0
+        "conv3_4": 1.0,
         "conv4_3": 1.0,
     }
     PerceptualLoss_use_input_norm: bool = True
     PerceptualLoss_range_norm: bool = True
-    PerceptualLoss_perceptual_weight: float = 80.0
-    PerceptualLoss_style_weight: float = 80.0
+    PerceptualLoss_perceptual_weight: float = 1.0
+    PerceptualLoss_style_weight: float = 1.0
     PerceptualLoss_criterion: str = "l1"
 
     mask_loss_weight: float = 1.0
@@ -112,8 +112,6 @@ class Trainer:
         self.iter = 1
 
         torch.cuda.set_device(self.cfg.device)
-        torch.set_float32_matmul_precision("high")
-        torch.backends.cudnn.benchmark = True
 
         self.loss_dict = {}
         self.net_d = StyleGAN2Discriminator(out_size=self.cfg.size).to(self.cfg.device)
@@ -192,22 +190,22 @@ class Trainer:
             betas=(0.0, 0.99),
         )
 
-        # if self.cfg.pretrain is not None:
-        #     self.d_optimizer.load_state_dict(checkpoint["d_optim"])
-        #     for param_group in self.d_optimizer.param_groups:
-        #         param_group["lr"] = self.cfg.d_lr
+        if self.cfg.pretrain is not None:
+            self.d_optimizer.load_state_dict(checkpoint["d_optim"])
+            for param_group in self.d_optimizer.param_groups:
+                param_group["lr"] = self.cfg.d_lr
 
-        #     self.g_optimizer.load_state_dict(checkpoint["g_optim"])
-        #     for param_group in self.g_optimizer.param_groups:
-        #         param_group["lr"] = self.cfg.g_lr
-        #     print("Optimizer state loaded from checkpoint.")
+            self.g_optimizer.load_state_dict(checkpoint["g_optim"])
+            for param_group in self.g_optimizer.param_groups:
+                param_group["lr"] = self.cfg.g_lr
+            print("Optimizer state loaded from checkpoint.")
 
         print(f"d_optimizer_lr: {self.d_optimizer.param_groups[0]["lr"]}")
         print(f"g_optimizer_lr: {self.g_optimizer.param_groups[0]["lr"]}")
 
-        self.ckpt_dir = os.path.join(self.cfg.base_path, self.cfg.ckpt_dir)
-        self.sample_dir = os.path.join(self.cfg.base_path, self.cfg.sample_dir)
-        self.tb_log_dir = os.path.join(self.cfg.base_path, self.cfg.tb_log_dir)
+        self.ckpt_dir = os.path.join(self.cfg.base_log_path, self.cfg.ckpt_dir)
+        self.sample_dir = os.path.join(self.cfg.base_log_path, self.cfg.sample_dir)
+        self.tb_log_dir = os.path.join(self.cfg.base_log_path, self.cfg.tb_log_dir)
 
         Path(self.ckpt_dir).mkdir(exist_ok=True, parents=True)
         Path(self.sample_dir).mkdir(exist_ok=True, parents=True)
@@ -226,6 +224,8 @@ class Trainer:
             self.cfg.PerceptualLoss_style_weight,
             self.cfg.PerceptualLoss_criterion,
         ).to(self.cfg.device)
+
+        self.au_loss = AULoss(weight=self.cfg.au_loss_weight).to(self.cfg.device)
 
         self.arcface = ArcFace().to(self.cfg.device)
         self.arcface.eval()
@@ -401,6 +401,10 @@ class Trainer:
                 g_loss += id_loss * cfg.id_loss_weight
 
                 # ------------- 感知损失 -------------
+                au_loss = self.au_loss(fake_img, target)
+                g_loss += au_loss
+                self.loss_dict["AU_loss"] = au_loss.detach()
+
                 percep_loss, style_loss = self.perceptualLoss(fake_img, target)
                 if percep_loss is not None:
                     g_loss += percep_loss
@@ -498,7 +502,7 @@ if __name__ == "__main__":
     cfg = TrainSet()
     cfg.batch = 2
     cfg.grad_accum_steps = 2
-    cfg.pretrain = "sig_d.pth"
+    cfg.pretrain = "log/train/ckpt/1222506_512.pth"
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
 
