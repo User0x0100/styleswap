@@ -37,7 +37,7 @@ class FaceParsing(nn.Module):
 
     def process(self, image: Image.Image):
         image = image.resize((512, 512), Image.Resampling.BOX)
-        image = self.to_tensor(image).unsqueeze_(0).cuda()
+        image = self.to_tensor(image).unsqueeze_(0).to(self.mean.device)
         image = (image - self.mean) / self.std
 
         with torch.no_grad():
