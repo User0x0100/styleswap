@@ -341,10 +341,10 @@ class Trainer:
             self.net_d.requires_grad_(True)
             self.net_g.requires_grad_(False)
             self.d_optimizer.zero_grad()
-            for i in range(cfg.grad_accum_steps):
+            for _ in range(cfg.grad_accum_steps):
 
                 target, source, mask, same = self.fetch_training_batch()
-                is_r1_reg_every = self.iter % cfg.r1_reg_every == 0 and i == 0
+                is_r1_reg_every = self.iter % cfg.r1_reg_every == 0
 
                 with torch.no_grad():
                     z_id = self.arcface(source)
@@ -357,10 +357,9 @@ class Trainer:
 
                 real_pred = self.net_d(target)
 
-                d_loss = (
-                    self.gan_loss(real_pred, True, is_disc=True)
-                    + self.gan_loss(fake_pred, False, is_disc=True)
-                ) / cfg.grad_accum_steps
+                d_loss = self.gan_loss(real_pred, True, is_disc=True) + self.gan_loss(
+                    fake_pred, False, is_disc=True
+                )
 
                 self.loss_dict["D"] = d_loss.detach()
                 self.loss_dict["real_score"] = real_pred.detach().mean()
@@ -373,6 +372,7 @@ class Trainer:
                     d_loss += r1
                     self.loss_dict["r1"] = r1.detach().mean()
 
+                d_loss = d_loss / cfg.grad_accum_steps
                 d_loss.backward()
 
             self.d_optimizer.step()
@@ -381,7 +381,7 @@ class Trainer:
             self.net_d.requires_grad_(False)
             self.net_g.requires_grad_(True)
             self.g_optimizer.zero_grad()
-            for i in range(cfg.grad_accum_steps):
+            for _ in range(cfg.grad_accum_steps):
 
                 target, source, mask, same = self.fetch_training_batch()
                 with torch.no_grad():
@@ -429,11 +429,9 @@ class Trainer:
                 g_loss += mask_loss * cfg.mask_loss_weight
 
                 # ------------- 总损失 -------------
-                g_loss = g_loss / cfg.grad_accum_steps
 
                 # 路径正则化
-                # if self.iter % cfg.path_reg_every == 0 and i == 0:
-
+                # if self.iter % cfg.path_reg_every == 0:
                 #     path_loss, mean_path_length, path_lengths = g_path_regularize(
                 #         fake_img, latents, mean_path_length
                 #     )
@@ -444,7 +442,7 @@ class Trainer:
                 #     self.loss_dict["path_loss"] = path_loss
                 #     self.loss_dict["path_lengths"] = path_lengths.mean()
 
-                # 反向传播
+                g_loss = g_loss / cfg.grad_accum_steps
                 g_loss.backward()
 
             self.g_optimizer.step()
@@ -502,6 +500,8 @@ class Trainer:
 if __name__ == "__main__":
 
     cfg = TrainSet()
+    cfg.batch = 24
+    cfg.pretrain = "log/train/ckpt/23228_512.pth"
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     is_distributed = world_size > 1
