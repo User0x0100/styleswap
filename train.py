@@ -48,16 +48,17 @@ class TrainSet:
     save_ckpt_every: int = 5000
     grad_accum_steps: int = 1
 
-    r1_reg_every: int = 16
-    r1_reg_weight: float = 10.0
+    gradient_penalty_every: int = 16
+    gradient_penalty_weight: float = 10.0
+    d_warmup_every: int = 1500
 
-    path_reg_every: int = 4
+    path_reg_every: int = 32
     path_reg_weight: float = 2.0
 
     d_lr: float = 0.0001
     g_lr: float = 0.0001
 
-    base_log_path: str = "log/train"
+    base_log_path: str = "log/isconcat-False"
     ckpt_dir: str = "ckpt"
     sample_dir: str = "sample"
     tb_log_dir: str = "tb_log"
@@ -65,8 +66,6 @@ class TrainSet:
     id_loss_weight: float = 5.0
 
     pixel_rec_weight: float = 1.0
-
-    gan_loss_weight: float = 1.0
 
     au_loss_weight: float = 1.0
 
@@ -164,14 +163,14 @@ class Trainer:
                 self.net_d,
                 device_ids=[self.cfg.device.index],
                 output_device=self.cfg.device.index,
-                broadcast_buffers=False,
+                broadcast_buffers=True,
             )
             self.net_g = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.net_g)
             self.net_g = DDP(
                 self.net_g,
                 device_ids=[self.cfg.device.index],
                 output_device=self.cfg.device.index,
-                broadcast_buffers=False,
+                broadcast_buffers=True,
             )
 
         net_d_params = (
@@ -189,6 +188,13 @@ class Trainer:
             params=net_d_params,
             lr=self.cfg.d_lr,
             betas=(0.0, 0.99),
+        )
+
+        self.d_warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            self.d_optimizer,
+            start_factor=0.1,
+            end_factor=1.0,
+            total_iters=self.cfg.d_warmup_every,
         )
 
         self.g_optimizer = torch.optim.Adam(
@@ -344,10 +350,11 @@ class Trainer:
             self.net_d.requires_grad_(True)
             self.net_g.requires_grad_(False)
             self.d_optimizer.zero_grad()
-            for i in range(cfg.grad_accum_steps):
+            for _ in range(cfg.grad_accum_steps):
 
                 target, source, mask, same = self.fetch_training_batch()
-                is_r1_reg_every = self.iter % cfg.r1_reg_every == 0 and i == 0
+
+                is_gp_every = self.iter % cfg.gradient_penalty_every == 0
 
                 with torch.no_grad():
                     z_id = self.arcface(source)
@@ -355,7 +362,7 @@ class Trainer:
 
                 fake_enc_out, fake_dec_out = self.net_d(fake_img)
 
-                if is_r1_reg_every:
+                if is_gp_every:
                     target.requires_grad_(True)
 
                 real_enc_out, real_dec_out = self.net_d(target)
@@ -366,7 +373,8 @@ class Trainer:
                 dec_divergence = (
                     F.relu(1 + real_dec_out) + F.relu(1 - fake_dec_out)
                 ).mean()
-                divergence = enc_divergence + dec_divergence * cfg.gan_loss_weight
+
+                divergence = enc_divergence + dec_divergence
 
                 self.loss_dict["D"] = divergence.detach().mean()
                 self.loss_dict["fake_enc_out"] = fake_enc_out.detach().mean()
@@ -374,21 +382,24 @@ class Trainer:
                 self.loss_dict["real_enc_out"] = real_enc_out.detach().mean()
                 self.loss_dict["real_dec_out"] = real_dec_out.detach().mean()
 
-                if is_r1_reg_every:
-
-                    gp = gradient_penalty(target, (real_enc_out,))
+                if is_gp_every:
+                    gp = gradient_penalty(
+                        target, (real_enc_out,), weight=cfg.gradient_penalty_weight
+                    )
                     divergence += gp
                     self.loss_dict["gp"] = gp.detach().mean()
 
+                divergence = divergence / cfg.grad_accum_steps
                 divergence.backward()
 
             self.d_optimizer.step()
+            self.d_warmup_scheduler.step()
 
             # =============== 训练生成器 ===============
             self.net_d.requires_grad_(False)
             self.net_g.requires_grad_(True)
             self.g_optimizer.zero_grad()
-            for i in range(cfg.grad_accum_steps):
+            for _ in range(cfg.grad_accum_steps):
 
                 target, source, mask, same = self.fetch_training_batch()
                 with torch.no_grad():
@@ -435,10 +446,7 @@ class Trainer:
                 self.loss_dict["Mask"] = mask_loss.detach()
                 g_loss += mask_loss * cfg.mask_loss_weight
 
-                g_loss = g_loss / cfg.grad_accum_steps
-
-                # if self.iter % cfg.path_reg_every == 0 and i == 0:
-
+                # if self.iter % cfg.path_reg_every == 0:
                 #     pl_lengths = calc_pl_lengths(latents, fake_img)
                 #     avg_pl_length = np.mean(pl_lengths.detach().cpu().numpy())
                 #     pl_mean = update_average(pl_mean, avg_pl_length)
@@ -447,7 +455,7 @@ class Trainer:
                 #     self.loss_dict["pl_loss"] = pl_loss.detach().mean()
                 #     self.loss_dict["pl_lengths"] = pl_lengths.detach().mean()
 
-                # 反向传播
+                g_loss = g_loss / cfg.grad_accum_steps
                 g_loss.backward()
 
             self.g_optimizer.step()
@@ -505,6 +513,11 @@ class Trainer:
 if __name__ == "__main__":
 
     cfg = TrainSet()
+    cfg.batch = 1
+    cfg.isconcat = False
+    cfg.grad_accum_steps = 4
+    cfg.d_lr = 0.0001
+    cfg.g_lr = 0.0001
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     is_distributed = world_size > 1
