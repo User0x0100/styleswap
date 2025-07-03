@@ -73,7 +73,7 @@ class FaceDataset(Dataset):
         self.flip_prob = flip_prob
         self.same_image_prob = same_image_prob
 
-        self.face_parsing = FaceParsing().to(device)
+        self.face_parsing = FaceParsing(device=self.device)
 
         # 解析目录配置
         self.image_dirs_config = (

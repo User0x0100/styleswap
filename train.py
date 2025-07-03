@@ -428,7 +428,7 @@ class Trainer:
                     self.loss_dict["Style"] = style_loss.detach()
 
                 # ------------- FACS -------------
-                if self.iter > 15000:
+                if self.iter > 100000:
                     au_loss = self.au_loss(fake_img, target)
                     g_loss += au_loss
                     self.loss_dict["AU"] = au_loss.detach()
