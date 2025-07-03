@@ -410,7 +410,7 @@ class Trainer:
                     self.loss_dict["Style"] = style_loss.detach()
 
                 # ------------- FACS -------------
-                if self.iter > 15000:
+                if self.iter > 100000:
                     au_loss = self.au_loss(fake_img, target)
                     g_loss += au_loss
                     self.loss_dict["AU"] = au_loss.detach()
@@ -501,7 +501,7 @@ if __name__ == "__main__":
 
     cfg = TrainSet()
     cfg.batch = 24
-    cfg.pretrain = "log/train/ckpt/23228_512.pth"
+    cfg.pretrain = "log/train/ckpt/47996_512.pth"
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     is_distributed = world_size > 1
