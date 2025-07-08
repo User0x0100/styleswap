@@ -1,1 +1,1 @@
-from . import bisenet, face_parsing, resnet
+from .parsing import FaceParsing

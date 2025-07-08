@@ -10,6 +10,8 @@ from torch.utils.cpp_extension import load
 import torch
 from torch import Tensor
 
+from torch.amp import custom_fwd
+
 _MODULE_PATH = os.path.dirname(__file__)
 build_dir = os.path.join(_MODULE_PATH, "torch_ext_build")
 os.makedirs(build_dir, exist_ok=True)
@@ -101,7 +103,7 @@ class FusedLeakyReLU(nn.Module):
     def forward(self, input):
         return fused_leaky_relu(input, self.bias, self.negative_slope, self.scale)
 
-
+@custom_fwd(device_type="cuda", cast_inputs=torch.float)
 def fused_leaky_relu(
     input: Tensor, bias: Tensor, negative_slope: float = 0.2, scale: float = 2**0.5
 ) -> Tensor:

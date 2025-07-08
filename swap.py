@@ -167,8 +167,8 @@ class Swapper:
 
 
 if __name__ == "__main__":
-    # target = f"/opt/share/deepfake/stable-diffusion/face_editor_test/高清数据/dfl_big/{random.randint(0,3124):04d}/{random.randint(0,999):04d}.png"
-    # source = f"/opt/share/deepfake/stable-diffusion/face_editor_test/高清数据/dfl_big/{random.randint(0,3124):04d}/{random.randint(0,999):04d}.png"
+    target = f"/opt/share/deepfake/stable-diffusion/face_editor_test/高清数据/dfl_big/{random.randint(0,3124):04d}/{random.randint(0,999):04d}.png"
+    source = f"/opt/share/deepfake/stable-diffusion/face_editor_test/高清数据/dfl_big/{random.randint(0,3124):04d}/{random.randint(0,999):04d}.png"
 
     # target = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/{random.randint(0,69999):05d}.png"
     # source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/{random.randint(0,69999):05d}.png"
@@ -180,11 +180,11 @@ if __name__ == "__main__":
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-02-17(袁忠 曹属馨)/20230217-160724910曹属馨(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-06-20(邓叮玲 许馨文)/20230620-155807793邓叮玲(电脑录屏).mp4"
-    target = "/opt/share/deepfake/linshi/录屏素材/2023-08-28(李小姐 邱小姐)/20230828-122302李小姐(电脑录屏).mp4"
+    # target = "/opt/share/deepfake/linshi/录屏素材/2023-08-28(李小姐 邱小姐)/20230828-122302李小姐(电脑录屏).mp4"
     # source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/{random.randint(0,69999):05d}.png"
 
     # target = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/25635.png"
     # source = f"/home/liaohaixun/styleswap_data/dateset/ffhq_1024/47125.png"
-    swapper = Swapper("ckpt/1140000_512.pth")
-    # swapper.swap(target, source, "result.png")
-    swapper.swap_video(target, "IDAssets/liuyifei.png", "result.mp4")
+    swapper = Swapper("log/train/ckpt/225000_512.pth")
+    swapper.swap(target, source, "result.png")
+    # swapper.swap_video(target, "IDAssets/liuyifei.png", "result.mp4")

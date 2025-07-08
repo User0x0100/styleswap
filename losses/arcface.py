@@ -1,8 +1,8 @@
-import os
 from torch.nn import functional as F
 import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
+from pathlib import Path
 
 __all__ = ["iresnet18", "iresnet34", "iresnet50", "iresnet100", "iresnet200"]
 using_ckpt = False
@@ -247,12 +247,48 @@ class ArcFace(nn.Module):
     def __init__(self, fp16: bool = True):
         super(ArcFace, self).__init__()
         self._iresnet = iresnet50(fp16=fp16)
-        weight = os.path.join(
-            os.path.dirname(__file__), "glint360k_r50_fp16.pth"
-        )  #  https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch
+        weight = Path(__file__).with_name("glint360k_r50_fp16.pth")
+        # https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch
+
         self._iresnet.load_state_dict(torch.load(weight, weights_only=True))
 
     def forward(self, x):
         x = F.interpolate(x, [112, 112], mode="area")
         id = self._iresnet(x)
         return F.normalize(id, p=2, dim=1)
+
+
+if __name__ == "__main__":
+    import time
+
+    device = "cuda:0"
+
+    arcface = ArcFace(fp16=False).to(device)
+    # arcface = torch.compile(
+    #     arcface,
+    #     fullgraph=True,
+    #     dynamic=False,
+    #     options={
+    #         "triton.cudagraphs": True,
+    #         "max_autotune": True,
+    #         "epilogue_fusion": True,
+    #     },
+    # )
+    input = torch.randn(24, 3, 512, 512, dtype=torch.float32, device=device)
+    for i in range(10):
+        arcface(input)
+
+    print("执行性能测试...")
+    times = []
+    for i in range(10):
+        start_time = time.time()
+        arcface(input)
+        times.append((time.time() - start_time) * 1000)
+
+    avg_time = sum(times) / len(times)
+    min_time = min(times)
+    fps = 1000 / avg_time
+
+    print(f"平均处理时间: {avg_time:.2f} ms")
+    print(f"最快处理时间: {min_time:.2f} ms")
+    print(f"处理帧率: {fps:.1f} FPS")

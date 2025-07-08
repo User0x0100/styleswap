@@ -1,22 +1,21 @@
 import os
-import time
 import itertools
 from torchvision import utils
 from pathlib import Path
 import torch
-from torch import nn
-from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import LinearLR
 from losses.arcface import ArcFace
 from model import FullGenerator, StyleGAN2Discriminator
-from losses import GANLoss, L1Loss, PerceptualLoss, r1_penalty, g_path_regularize
+from losses import GANLoss, PerceptualLoss, r1_penalty, g_path_regularize
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from dataloader.data_loader import FaceDataset
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from losses.au import AULoss
+from torch.amp import autocast, GradScaler
+from dataloader import swap_pipe
+from face_parsing import FaceParsing
+from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 
 DEVICE_TYPE = "cuda"
 
@@ -44,8 +43,8 @@ class TrainSet:
     r1_reg_every: int = 16
     r1_reg_weight: float = 10.0
 
-    path_reg_every: int = 4
-    path_reg_weight: float = 2.0
+    path_reg_every: int = 32
+    path_reg_weight: float = 0.5
 
     d_lr: float = 0.0001
     g_lr: float = 0.0001
@@ -65,10 +64,7 @@ class TrainSet:
     au_loss_weight: float = 1.0
 
     PerceptualLoss_loss_type: str = "vgg19"
-    PerceptualLoss_layer_weights: dict[str, float] = {
-        "conv3_4": 1.0,
-        "conv4_3": 1.0,
-    }
+    PerceptualLoss_layer_weights: dict[str, float] = {"conv3_4": 1.0, "conv4_3": 1.0}
     PerceptualLoss_use_input_norm: bool = True
     PerceptualLoss_range_norm: bool = True
     PerceptualLoss_perceptual_weight: float = 1.0
@@ -87,191 +83,161 @@ class TrainSet:
 
     image_path = None
 
-    target_dirs = [
-        ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.25),
-        ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.25),
-        ("/opt/share/deepfake/dataset_1/closed_eyes", 0.25),
-        ("/opt/share/deepfake/dataset_1/large_angle", 0.25),
+    target_folders = [
+        ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.333333),
+        ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.333333),
+        ("/opt/share/deepfake/dataset_1/vggface2_hq512", 0.333333),
+        # ("/opt/share/deepfake/dataset_1/closed_eyes", 0.25),
+        # ("/opt/share/deepfake/dataset_1/large_angle", 0.25),
     ]
-    source_dirs = [
-        ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.5),
-        ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.5),
+    source_folders = [
+        ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.333333),
+        ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.333333),
+        ("/opt/share/deepfake/dataset_1/vggface2_hq512", 0.333333),
     ]
-
-
-def sample_data(loader):
-    while True:
-        for batch in loader:
-            yield batch
 
 
 class Trainer:
-    def __init__(self, config: TrainSet):
+    def __init__(self, cfg: TrainSet):
 
-        self.cfg = config
+        self.cfg = cfg
         self.iter = 1
 
-        torch.cuda.set_device(self.cfg.device)
+        torch.cuda.set_device(cfg.device)
+
+        if cfg.pretrain is None:
+            checkpoint = None
+        else:
+            print(f"Loading pretrain checkpoint from {cfg.pretrain}")
+            checkpoint = torch.load(cfg.pretrain, map_location=cfg.device, weights_only=False)
 
         self.loss_dict = {}
-        self.net_d = StyleGAN2Discriminator(out_size=self.cfg.size).to(self.cfg.device)
 
-        self.net_g = FullGenerator(
-            self.cfg.size,
-            style_dim=self.cfg.style_dim,
-            n_mlp=self.cfg.n_mlp,
-            isconcat=self.cfg.isconcat,
-        ).to(self.cfg.device)
-        self.net_g_ema = FullGenerator(
-            self.cfg.size,
-            style_dim=self.cfg.style_dim,
-            n_mlp=self.cfg.n_mlp,
-            isconcat=self.cfg.isconcat,
-        ).to(self.cfg.device)
+        self.net_d = StyleGAN2Discriminator(out_size=cfg.size).to(cfg.device)
+        self.net_g = FullGenerator(size=cfg.size, style_dim=cfg.style_dim, n_mlp=cfg.n_mlp, isconcat=cfg.isconcat).to(cfg.device)
+        self.net_g_ema = FullGenerator(size=cfg.size, style_dim=cfg.style_dim, n_mlp=cfg.n_mlp, isconcat=cfg.isconcat).to(cfg.device)
 
-        if self.cfg.pretrain is not None:
-            print(f"Loading pretrain checkpoint from {self.cfg.pretrain}")
+        if checkpoint is not None:
 
-            checkpoint = torch.load(
-                self.cfg.pretrain,
-                map_location=self.cfg.device,
-                weights_only=False,
-            )
+            if "iter" in checkpoint:
+                self.iter = checkpoint["iter"]
+                print(f"iter = {self.iter}")
 
-            self.iter = checkpoint.get("iter", 0)
-            print(f"iter = {self.iter}")
+            if "d" in checkpoint:
+                self.net_d.load_state_dict(checkpoint["d"])
+                print("Loaded net_d state from checkpoint.")
 
-            self.net_d.load_state_dict(checkpoint["d"])
-            self.net_g.load_state_dict(checkpoint["g"])
-            self.net_g_ema.load_state_dict(checkpoint["g_ema"])
-            print("Pretrain checkpoint loaded successfully.")
+            if "g" in checkpoint:
+                self.net_g.load_state_dict(checkpoint["g"])
+                print("Loaded net_g state from checkpoint.")
+
+            if "g_ema" in checkpoint:
+                self.net_g_ema.load_state_dict(checkpoint["g_ema"])
+                print("Loaded net_g_ema state from checkpoint.")
 
         self.net_d.train()
         self.net_g.train()
         self.net_g_ema.eval()
 
-        if self.cfg.is_distributed:
-
+        if cfg.is_distributed:
             self.net_d = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.net_d)
-            self.net_d = DDP(
-                self.net_d,
-                device_ids=[self.cfg.device.index],
-                output_device=self.cfg.device.index,
-                broadcast_buffers=False,
-            )
+            self.net_d = DDP(self.net_d, device_ids=[cfg.device.index], output_device=cfg.device.index, broadcast_buffers=False)
             self.net_g = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.net_g)
-            self.net_g = DDP(
-                self.net_g,
-                device_ids=[self.cfg.device.index],
-                output_device=self.cfg.device.index,
-                broadcast_buffers=False,
-            )
+            self.net_g = DDP(self.net_g, device_ids=[cfg.device.index], output_device=cfg.device.index, broadcast_buffers=True)
 
-        net_d_params = (
-            self.net_d.module.parameters()
-            if self.cfg.is_distributed
-            else self.net_d.parameters()
-        )
-        net_g_params = (
-            self.net_g.module.parameters()
-            if self.cfg.is_distributed
-            else self.net_g.parameters()
-        )
+        net_d_params = self.net_d.module.parameters() if cfg.is_distributed else self.net_d.parameters()
+        net_g_params = self.net_g.module.parameters() if cfg.is_distributed else self.net_g.parameters()
 
-        self.d_optimizer = torch.optim.Adam(
-            params=net_d_params,
-            lr=self.cfg.d_lr,
-            betas=(0.0, 0.99),
-        )
+        self.d_optimizer = torch.optim.Adam(params=net_d_params, lr=cfg.d_lr, betas=(0.0, 0.99))
+        self.g_optimizer = torch.optim.Adam(params=net_g_params, lr=cfg.g_lr, betas=(0.0, 0.99))
 
-        self.g_optimizer = torch.optim.Adam(
-            params=net_g_params,
-            lr=self.cfg.g_lr,
-            betas=(0.0, 0.99),
-        )
+        if checkpoint is not None:
+            if "d_optim" in checkpoint:
+                self.d_optimizer.load_state_dict(checkpoint["d_optim"])
+                for param_group in self.d_optimizer.param_groups:
+                    param_group["lr"] = cfg.d_lr
+                print("Loaded d_optimizer state from checkpoint.")
+                print(f"d_optimizer_lr: {self.d_optimizer.param_groups[0]["lr"]}")
 
-        if self.cfg.pretrain is not None:
-            self.d_optimizer.load_state_dict(checkpoint["d_optim"])
-            for param_group in self.d_optimizer.param_groups:
-                param_group["lr"] = self.cfg.d_lr
+            if "g_optim" in checkpoint:
+                self.g_optimizer.load_state_dict(checkpoint["g_optim"])
+                for param_group in self.g_optimizer.param_groups:
+                    param_group["lr"] = cfg.g_lr
+                print("Loaded g_optimizer state from checkpoint.")
+                print(f"g_optimizer_lr: {self.g_optimizer.param_groups[0]["lr"]}")
 
-            self.g_optimizer.load_state_dict(checkpoint["g_optim"])
-            for param_group in self.g_optimizer.param_groups:
-                param_group["lr"] = self.cfg.g_lr
-            print("Optimizer state loaded from checkpoint.")
-
-        print(f"d_optimizer_lr: {self.d_optimizer.param_groups[0]["lr"]}")
-        print(f"g_optimizer_lr: {self.g_optimizer.param_groups[0]["lr"]}")
-
-        self.ckpt_dir = os.path.join(self.cfg.base_log_path, self.cfg.ckpt_dir)
-        self.sample_dir = os.path.join(self.cfg.base_log_path, self.cfg.sample_dir)
-        self.tb_log_dir = os.path.join(self.cfg.base_log_path, self.cfg.tb_log_dir)
+        self.ckpt_dir = os.path.join(cfg.base_log_path, cfg.ckpt_dir)
+        self.sample_dir = os.path.join(cfg.base_log_path, cfg.sample_dir)
+        self.tb_log_dir = os.path.join(cfg.base_log_path, cfg.tb_log_dir)
 
         Path(self.ckpt_dir).mkdir(exist_ok=True, parents=True)
         Path(self.sample_dir).mkdir(exist_ok=True, parents=True)
         Path(self.tb_log_dir).mkdir(exist_ok=True, parents=True)
 
-        self.gan_loss = GANLoss(
-            self.cfg.gan_type, loss_weight=self.cfg.gan_loss_weight
-        ).to(self.cfg.device)
+        self.gan_loss = GANLoss(cfg.gan_type, loss_weight=cfg.gan_loss_weight).to(cfg.device)
 
         self.perceptualLoss = PerceptualLoss(
-            self.cfg.PerceptualLoss_layer_weights,
-            self.cfg.PerceptualLoss_loss_type,
-            self.cfg.PerceptualLoss_use_input_norm,
-            self.cfg.PerceptualLoss_range_norm,
-            self.cfg.PerceptualLoss_perceptual_weight,
-            self.cfg.PerceptualLoss_style_weight,
-            self.cfg.PerceptualLoss_criterion,
-        ).to(self.cfg.device)
+            cfg.PerceptualLoss_layer_weights,
+            cfg.PerceptualLoss_loss_type,
+            cfg.PerceptualLoss_use_input_norm,
+            cfg.PerceptualLoss_range_norm,
+            cfg.PerceptualLoss_perceptual_weight,
+            cfg.PerceptualLoss_style_weight,
+            cfg.PerceptualLoss_criterion,
+        ).to(cfg.device)
 
-        self.au_loss = AULoss(weight=self.cfg.au_loss_weight).to(self.cfg.device)
+        self.au_loss = AULoss(weight=cfg.au_loss_weight).to(cfg.device)
 
-        self.arcface = ArcFace().to(self.cfg.device)
+        self.arcface = ArcFace().to(cfg.device)
         self.arcface.eval()
         self.arcface.requires_grad_(False)
 
-        dataset = FaceDataset(
-            size=self.cfg.size,
-            target_dirs=self.cfg.target_dirs,
-            source_dirs=self.cfg.source_dirs,
-            same_image_prob=self.cfg.same_image_prob,
-            device=self.cfg.device,
+        pipe = swap_pipe(
+            batch_size=cfg.batch,
+            num_threads=2,
+            prefetch_queue_depth=4,
+            py_num_workers=2,
+            py_start_method="spawn",
+            device_id=cfg.device.index,
+            resize=cfg.size,
+            target_folders=cfg.target_folders,
+            source_folders=cfg.source_folders,
+            same_image_prob=cfg.same_image_prob,
         )
 
-        loader = DataLoader(
-            dataset,
-            batch_size=self.cfg.batch,
-            shuffle=True,
-            num_workers=2,
-            drop_last=True,
-            pin_memory=True,
-            pin_memory_device=str(self.cfg.device),
-            prefetch_factor=3,
-            persistent_workers=True,
-            multiprocessing_context="spawn",
+        self.loader = DALIGenericIterator(
+            pipelines=pipe, output_map=["tgt", "src", "is_same"], auto_reset=True, last_batch_policy=LastBatchPolicy.DROP
         )
-        self.loader = sample_data(loader)
 
-        if self.cfg.device.index == 0:
+        if cfg.device.index == 0:
             self.writer = SummaryWriter(log_dir=self.tb_log_dir)
+
+        self.scaler_d = GradScaler()
+        self.scaler_g = GradScaler()
+
+        if checkpoint is not None:
+            if "scaler_d" in checkpoint:
+                self.scaler_d.load_state_dict(checkpoint["scaler_d"])
+                print("Loaded scaler_d state from checkpoint.")
+
+            if "scaler_g" in checkpoint:
+                self.scaler_g.load_state_dict(checkpoint["scaler_g"])
+                print("Loaded scaler_g state from checkpoint.")
+
+        self.face_pras = FaceParsing(device=cfg.device)
 
     def model_ema(self, decay=0.999):
 
-        net_g_params = self.net_g.module if self.cfg.is_distributed else self.net_g
+        net_g_params = self.net_g.module if cfg.is_distributed else self.net_g
         net_g_params = dict(net_g_params.named_parameters())
         net_g_ema_params = dict(self.net_g_ema.named_parameters())
 
         for k in net_g_ema_params.keys():
-            net_g_ema_params[k].data.mul_(decay).add_(
-                net_g_params[k].data, alpha=1 - decay
-            )
+            net_g_ema_params[k].data.mul_(decay).add_(net_g_params[k].data, alpha=1 - decay)
 
     def save(self):
 
-        cfg = self.cfg
-
-        if cfg.is_distributed:
+        if self.cfg.is_distributed:
             d = self.net_d.module
             g = self.net_g.module
         else:
@@ -285,6 +251,8 @@ class Trainer:
             "g_ema": self.net_g_ema.state_dict(),
             "d_optim": self.d_optimizer.state_dict(),
             "g_optim": self.g_optimizer.state_dict(),
+            "scaler_d": self.scaler_d.state_dict(),
+            "scaler_g": self.scaler_g.state_dict(),
         }
 
         save_file = os.path.join(self.ckpt_dir, f"{str(self.iter)}_{self.cfg.size}.pth")
@@ -292,14 +260,12 @@ class Trainer:
         torch.save(save_dict, save_file)
 
     def fetch_training_batch(self):
-        cfg = self.cfg
-        target, source, mask, same = next(self.loader)
 
-        target = target.to(cfg.device)
-        source = source.to(cfg.device)
-        mask = mask.to(cfg.device)
-        same = same.to(cfg.device)
-        return target, source, mask, same
+        data = self.loader.next()[0]
+
+        target, source, same = data["tgt"], data["src"], data["is_same"]
+        mask = self.face_pras.process(target)
+        return target, source, mask, same.squeeze()
 
     def reduce_loss_dict(self):
 
@@ -326,14 +292,12 @@ class Trainer:
 
         cfg = self.cfg
         if cfg.device.index == 0:
-            pbar = tqdm(
-                itertools.count(start=self.iter), initial=self.iter, unit="iter"
-            )
+            pbar = tqdm(itertools.count(start=self.iter), initial=self.iter, unit="iter")
         else:
             pbar = itertools.count(start=self.iter)
 
-        # mean_path_length = 0
-
+        mean_path_length = 0
+        torch.cuda.empty_cache()
         # 主训练循环
         for self.iter in pbar:
 
@@ -341,117 +305,124 @@ class Trainer:
             self.net_d.requires_grad_(True)
             self.net_g.requires_grad_(False)
             self.d_optimizer.zero_grad()
-            for _ in range(cfg.grad_accum_steps):
 
-                target, source, mask, same = self.fetch_training_batch()
-                is_r1_reg_every = self.iter % cfg.r1_reg_every == 0
+            with autocast(device_type=DEVICE_TYPE, dtype=torch.float16):
 
-                with torch.no_grad():
-                    z_id = self.arcface(source)
-                    fake_img, _, _ = self.net_g(target, z_id)
+                for accum_step in range(cfg.grad_accum_steps):
 
-                fake_pred = self.net_d(fake_img)
+                    target, source, mask, same = self.fetch_training_batch()
+                    is_r1_reg_every = (self.iter % cfg.r1_reg_every == 0) and (accum_step == cfg.grad_accum_steps - 1)
 
-                if is_r1_reg_every:
-                    target.requires_grad_(True)
+                    with torch.no_grad():
+                        z_id = self.arcface(source)
+                        fake_img, _, _ = self.net_g(target, z_id)
 
-                real_pred = self.net_d(target)
+                    fake_pred = self.net_d(fake_img)
 
-                d_loss = self.gan_loss(real_pred, True, is_disc=True) + self.gan_loss(
-                    fake_pred, False, is_disc=True
-                )
+                    if is_r1_reg_every:
+                        target.requires_grad_(True)
 
-                self.loss_dict["D"] = d_loss.detach()
-                self.loss_dict["real_score"] = real_pred.detach().mean()
-                self.loss_dict["fake_score"] = fake_pred.detach().mean()
+                    real_pred = self.net_d(target)
 
-                if is_r1_reg_every:
+                    d_loss = self.gan_loss(real_pred, True, is_disc=True) + self.gan_loss(fake_pred, False, is_disc=True)
 
-                    r1 = r1_penalty(real_pred, target)
-                    r1 = cfg.r1_reg_weight / 2 * r1 * cfg.r1_reg_every
-                    d_loss += r1
-                    self.loss_dict["r1"] = r1.detach().mean()
+                    self.loss_dict["D"] = d_loss.detach()
+                    self.loss_dict["real_score"] = real_pred.detach().mean()
+                    self.loss_dict["fake_score"] = fake_pred.detach().mean()
 
-                d_loss = d_loss / cfg.grad_accum_steps
-                d_loss.backward()
+                    d_loss = d_loss / cfg.grad_accum_steps
 
-            self.d_optimizer.step()
+                    if is_r1_reg_every:
+                        r1 = r1_penalty(real_pred, target)
+                        r1 = cfg.r1_reg_weight / 2 * r1 * cfg.r1_reg_every
+                        d_loss += r1
+                        self.loss_dict["r1"] = r1.detach().mean()
+
+                    self.scaler_d.scale(d_loss).backward()
+
+            self.scaler_d.step(self.d_optimizer)
+            self.scaler_d.update()
 
             # =============== 训练生成器 ===============
             self.net_d.requires_grad_(False)
             self.net_g.requires_grad_(True)
             self.g_optimizer.zero_grad()
-            for _ in range(cfg.grad_accum_steps):
 
-                target, source, mask, same = self.fetch_training_batch()
-                with torch.no_grad():
-                    z_id = self.arcface(source)
+            with autocast(device_type=DEVICE_TYPE, dtype=torch.float16):
 
-                fake_img, _, fake_mask = self.net_g(target, z_id)
+                for accum_step in range(cfg.grad_accum_steps):
 
-                # ------------- 对抗损失 -------------
-                fake_pred = self.net_d(fake_img)
-                g_loss = self.gan_loss(fake_pred, True, is_disc=False)
-                self.loss_dict["G"] = g_loss.detach()
+                    target, source, mask, same = self.fetch_training_batch()
+                    with torch.no_grad():
+                        z_id = self.arcface(source)
 
-                # ------------- 身份损失 -------------
-                fake_z_id = self.arcface(fake_img)
-                id_loss = (1 - torch.cosine_similarity(fake_z_id, z_id)).mean()
-                self.loss_dict["ID"] = id_loss.detach()
-                g_loss += id_loss * cfg.id_loss_weight
+                    fake_img, latents, fake_mask = self.net_g(target, z_id)
 
-                # ------------- 感知损失 -------------
-                percep_loss, style_loss = self.perceptualLoss(fake_img, target)
-                if percep_loss is not None:
-                    g_loss += percep_loss
-                    self.loss_dict["Percep"] = percep_loss.detach()
-                if style_loss is not None:
-                    g_loss += style_loss
-                    self.loss_dict["Style"] = style_loss.detach()
+                    # ------------- 对抗损失 -------------
+                    fake_pred = self.net_d(fake_img)
+                    g_loss = self.gan_loss(fake_pred, True, is_disc=False)
+                    self.loss_dict["G"] = g_loss.detach()
 
-                # ------------- FACS -------------
-                if self.iter > 100000:
-                    au_loss = self.au_loss(fake_img, target)
-                    g_loss += au_loss
-                    self.loss_dict["AU"] = au_loss.detach()
+                    # ------------- 身份损失 -------------
+                    fake_z_id = self.arcface(fake_img)
+                    id_loss = (1 - torch.cosine_similarity(fake_z_id, z_id)).mean()
+                    self.loss_dict["ID"] = id_loss.detach()
+                    g_loss += id_loss * cfg.id_loss_weight
 
-                # ------------- 启发式误差识别细化(FaceShifter) -------------
-                err_per_sample = torch.abs(fake_img - target).mean(dim=(1, 2, 3))
-                numerator = torch.dot(err_per_sample, same)
-                denominator = same.sum().clamp_min(1e-8)  # 防止除零
-                rec_pix = numerator / denominator
-                g_loss += rec_pix * cfg.pixel_rec_weight
-                self.loss_dict["Pixel_Rec"] = rec_pix
+                    # ------------- 感知损失 -------------
+                    percep_loss, style_loss = self.perceptualLoss(fake_img, target)
+                    if percep_loss is not None:
+                        g_loss += percep_loss
+                        self.loss_dict["Percep"] = percep_loss.detach()
+                    if style_loss is not None:
+                        g_loss += style_loss
+                        self.loss_dict["Style"] = style_loss.detach()
 
-                # ------------- 掩码损失 -------------
-                mask_loss = F.binary_cross_entropy(fake_mask, mask).mean()
-                self.loss_dict["Mask"] = mask_loss.detach()
-                g_loss += mask_loss * cfg.mask_loss_weight
+                    # ------------- FACS -------------
+                    if self.iter > 500000:
+                        au_loss = self.au_loss(fake_img, target)
+                        g_loss += au_loss
+                        self.loss_dict["AU"] = au_loss.detach()
 
-                # ------------- 总损失 -------------
+                    # ------------- 启发式误差识别细化(FaceShifter) -------------
+                    err_per_sample = torch.abs(fake_img - target).mean(dim=(1, 2, 3))
+                    numerator = torch.dot(err_per_sample, same)
+                    denominator = same.sum().clamp_min(1e-8)  # 防止除零
+                    rec_pix = numerator / denominator
+                    g_loss += rec_pix * cfg.pixel_rec_weight
+                    self.loss_dict["Pixel_Rec"] = rec_pix
 
-                # 路径正则化
-                # if self.iter % cfg.path_reg_every == 0:
-                #     path_loss, mean_path_length, path_lengths = g_path_regularize(
-                #         fake_img, latents, mean_path_length
-                #     )
-                #     weighted_path_loss = (
-                #         cfg.path_reg_weight * cfg.path_reg_every * path_loss
-                #     )
-                #     g_loss += weighted_path_loss
-                #     self.loss_dict["path_loss"] = path_loss
-                #     self.loss_dict["path_lengths"] = path_lengths.mean()
+                    # ------------- 掩码损失 -------------
+                    with autocast(device_type=DEVICE_TYPE, enabled=False):
+                        mask_loss = F.binary_cross_entropy(fake_mask, mask).mean()
+                        self.loss_dict["Mask"] = mask_loss.detach()
+                        g_loss += mask_loss * cfg.mask_loss_weight
 
-                g_loss = g_loss / cfg.grad_accum_steps
-                g_loss.backward()
+                    # -----------------------------------
+                    g_loss = g_loss / cfg.grad_accum_steps
 
-            self.g_optimizer.step()
+                    # 路径正则化
+                    if (self.iter % cfg.path_reg_every == 0) and (accum_step == cfg.grad_accum_steps - 1):
+                        path_loss, mean_path_length, path_lengths = g_path_regularize(fake_img, latents, mean_path_length)
+                        weighted_path_loss = cfg.path_reg_weight * cfg.path_reg_every * path_loss
+                        g_loss += weighted_path_loss
+                        self.loss_dict["path_loss"] = path_loss
+                        self.loss_dict["path_lengths"] = path_lengths.mean()
+                        self.loss_dict["mean_path_length"] = mean_path_length.mean()
+
+                    self.scaler_g.scale(g_loss).backward()
+
+            self.scaler_g.step(self.g_optimizer)
+            self.scaler_g.update()
 
             if cfg.device.index == 0:
                 self.model_ema()
 
             if self.iter % 10 == 0:
                 self.reduce_loss_dict()
+
+            if self.iter % 1000 == 0:
+                torch.cuda.empty_cache()
 
             if cfg.device.index == 0:
                 # 统计所有损失和分数
@@ -479,18 +450,10 @@ class Trainer:
                         fake_mask = (fake_mask.repeat(1, 3, 1, 1) - 0.5) / 0.5
                         mask = (mask.repeat(1, 3, 1, 1) - 0.5) / 0.5
                         grid = torch.cat((target, source, fake, fake_mask, mask), 0)
-                        save_file = os.path.join(
-                            self.sample_dir, f"{str(self.iter)}_{cfg.size}.png"
-                        )
+                        save_file = os.path.join(self.sample_dir, f"{str(self.iter)}_{cfg.size}.png")
 
                         # 保存样本图像
-                        utils.save_image(
-                            grid,
-                            save_file,
-                            nrow=cfg.batch,
-                            normalize=True,
-                            value_range=(-1, 1),
-                        )
+                        utils.save_image(grid, save_file, nrow=cfg.batch, normalize=True, value_range=(-1, 1))
 
                 # 定期保存模型
                 if self.iter % cfg.save_ckpt_every == 0:
@@ -500,8 +463,8 @@ class Trainer:
 if __name__ == "__main__":
 
     cfg = TrainSet()
-    cfg.batch = 24
-    cfg.pretrain = "log/train/ckpt/47996_512.pth"
+    cfg.batch = 20
+    cfg.pretrain = "log/train/ckpt/238693_512.pth"
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     is_distributed = world_size > 1
@@ -509,9 +472,7 @@ if __name__ == "__main__":
     if is_distributed:
         local_rank = int(os.environ["LOCAL_RANK"])
         print(f"分布式训练: world_size={world_size}, local_rank={local_rank}")
-        torch.distributed.init_process_group(
-            backend="nccl", init_method="env://", world_size=world_size
-        )
+        torch.distributed.init_process_group(backend="nccl", init_method="env://", world_size=world_size)
         cfg.device = torch.device(DEVICE_TYPE, local_rank)
         cfg.is_distributed = is_distributed
     else:

@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from torchvision.transforms import functional as F
 from PIL import Image
-from face_parsing.face_parsing import FaceParsing
+from face_parsing.parsing import FaceParsing
 
 
 class WeightedDirectorySelector:
@@ -454,22 +454,64 @@ class FaceDataset(Dataset):
 # 使用示例
 if __name__ == "__main__":
 
-    # 示例4: 原有的多目录配置
+    from torch.utils.data import DataLoader
+    import time
+
+    device = "cuda:0"
+
+    def sample_data(loader):
+        while True:
+            for batch in loader:
+                yield batch
+
     dataset = FaceDataset(
-        image_dirs=["/home/liaohaixun/styleswap_data/dateset/ffhq_1024"],
-        # target_dirs=[
-        #     ("filter_results/closed_eyes", 0.5),
-        #     ("filter_results/large_angle", 0.5),
-        # ],
-        # source_dirs=[
-        #     "/home/liaohaixun/styleswap_data/dateset/ffhq_1024",
-        # ],
+        target_dirs=[
+            ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.25),
+            ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.25),
+            ("/opt/share/deepfake/dataset_1/closed_eyes", 0.25),
+            ("/opt/share/deepfake/dataset_1/large_angle", 0.25),
+        ],
+        source_dirs=[
+            ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.5),
+            ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.5),
+        ],
         size=512,
         cache_file="dataset_cache.json",
     )
 
-    # 查看数据集信息
-    print("数据集信息:")
-    import json
+    loader = DataLoader(
+        dataset,
+        batch_size=24,
+        shuffle=True,
+        num_workers=1,
+        drop_last=True,
+        pin_memory=True,
+        pin_memory_device=str(device),
+        prefetch_factor=1,
+        persistent_workers=True,
+        multiprocessing_context="spawn",
+    )
+    loader = sample_data(loader)
 
-    print(json.dumps(dataset.get_dataset_info(), indent=2, ensure_ascii=False))
+    x = next(loader)
+
+    print("执行性能测试...")
+    times = []
+    for i in range(5):
+        start_time = time.time()
+        x = next(loader)
+        times.append((time.time() - start_time) * 1000)
+
+    avg_time = sum(times) / len(times)
+    min_time = min(times)
+    fps = 1000 / avg_time
+
+    print(f"平均处理时间: {avg_time:.2f} ms")
+    print(f"最快处理时间: {min_time:.2f} ms")
+    print(f"处理帧率: {fps:.1f} FPS")
+
+    # 查看数据集信息
+    # print("数据集信息:")
+    # import json
+
+    # print(json.dumps(dataset.get_dataset_info(), indent=2, ensure_ascii=False))

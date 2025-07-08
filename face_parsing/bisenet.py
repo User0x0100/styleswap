@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .resnet import Resnet18
+from typing import Tuple
 
 
 class ConvBNReLU(nn.Module):
@@ -234,8 +235,11 @@ class BiSeNet(nn.Module):
         self.conv_out32 = BiSeNetOutput(128, 64, n_classes)
         self.init_weight()
 
-    def forward(self, x):
-        H, W = x.size()[2:]
+    def forward(self, x, h_w: Tuple[int, int] | None = None):
+        if h_w is None:
+            H, W = x.size()[2:]
+        else:
+            H, W = h_w[0:]
         feat_res8, feat_cp8, feat_cp16 = self.cp(x)  # here return res3b1 feature
         feat_sp = feat_res8  # use res3b1 feature to replace spatial path feature
         feat_fuse = self.ffm(feat_sp, feat_cp8)

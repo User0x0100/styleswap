@@ -4,6 +4,7 @@ from torch.autograd import Function
 from functools import lru_cache
 from torch.utils.cpp_extension import load
 import torch
+from torch.amp import custom_fwd
 
 _MODULE_PATH = os.path.dirname(__file__)
 build_dir = os.path.join(_MODULE_PATH, "torch_ext_build")
@@ -154,7 +155,7 @@ class UpFirDn2d(Function):
 
         return grad_input, None, None, None, None
 
-
+@custom_fwd(device_type="cuda", cast_inputs=torch.float)
 def upfirdn2d(input, kernel, up=1, down=1, pad=(0, 0)):
     if input.device.type == "cpu":
         return upfirdn2d_native(
