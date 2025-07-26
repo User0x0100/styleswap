@@ -10,3 +10,4 @@ from .losses import (
     gradient_penalty_loss,
     r1_penalty,
 )
+from .id_loss import IDLoss

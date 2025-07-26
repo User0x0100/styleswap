@@ -13,7 +13,7 @@ import torchvision.transforms as transforms
 import PIL.Image as Image
 from typing import Dict, List
 from losses.arcface import ArcFace
-from model import FullGenerator
+from face_swap_model import FullGenerator
 from losses import (
     GANLoss,
     L1Loss,
@@ -28,7 +28,7 @@ from dataloader.data_loader import FaceDataset
 CONFIG = {
     "size": 512,
     "checkpoint": "log/train/ckpt/1185000_512.pth",
-    "device": "cuda:0",
+    "device": "cuda",
     "image_path": ["/home/liaohaixun/styleswap_data/dateset/ffhq_1024"],
     "output_dir": "loss_visualization_output",
     "loss_type": "vgg19",

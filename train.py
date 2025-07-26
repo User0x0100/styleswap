@@ -3,18 +3,16 @@ import itertools
 from torchvision import utils
 from pathlib import Path
 import torch
-from losses.arcface import ArcFace
-from model import FullGenerator, StyleGAN2Discriminator
-from losses import GANLoss, PerceptualLoss, r1_penalty, g_path_regularize
+from face_swap_model import FullGenerator, StyleGAN2Discriminator
+from losses import GANLoss, PerceptualLoss, IDLoss, r1_penalty, g_path_regularize
+from misc.model import FaceParsing
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from losses.au import AULoss
 from torch.amp import autocast, GradScaler
 from dataloader import swap_pipe
-from face_parsing import FaceParsing
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 
 DEVICE_TYPE = "cuda"
@@ -28,13 +26,13 @@ class TrainSet:
     device: torch.device = torch.device(DEVICE_TYPE, 0)
     is_distributed: bool = False
 
-    pretrain: None | str = None
+    ckpt: None | str = None
 
-    batch: int = 8
+    batch_size: int = 8
     size: int = 512
     style_dim: int = 512
     n_mlp: int = 8
-    isconcat: bool = True
+    isconcat: bool = False
 
     save_samples_every: int = 250
     save_ckpt_every: int = 5000
@@ -43,32 +41,44 @@ class TrainSet:
     r1_reg_every: int = 16
     r1_reg_weight: float = 10.0
 
-    path_reg_every: int = 32
-    path_reg_weight: float = 0.5
+    # path_reg_every: int = 32
+    # path_reg_weight: float = 2.0
 
-    d_lr: float = 0.0001
-    g_lr: float = 0.0001
+    d_lr: float = 0.001
+    g_lr: float = 0.001
 
     base_log_path: str = "log/train"
     ckpt_dir: str = "ckpt"
     sample_dir: str = "sample"
     tb_log_dir: str = "tb_log"
 
-    id_loss_weight: float = 4.0
+    id_loss_weight: float = 1.0
 
-    pixel_rec_weight: float = 1.0
+    hear_weight: float = 1.0
+
+    wfm_weight: float = 0.2
 
     gan_type: str = "wgan_softplus"
     gan_loss_weight: float = 1.0
 
-    au_loss_weight: float = 1.0
+    # au_loss_weight: float = 1.0
 
     PerceptualLoss_loss_type: str = "vgg19"
-    PerceptualLoss_layer_weights: dict[str, float] = {"conv3_4": 1.0, "conv4_3": 1.0}
+    # PerceptualLoss_layer_weights: dict[str, float] = {
+    #     "conv2_1": 0.5,
+    #     "conv3_1": 1.0,
+    #     "conv4_3": 1.0,
+    # }
+    PerceptualLoss_layer_weights: dict[str, float] = {
+        "conv1_2": 1.0 / 8,
+        "conv2_2": 1.0 / 8,
+        "conv3_4": 1.0 / 4,
+        "conv4_3": 1.0 / 2,
+    }
     PerceptualLoss_use_input_norm: bool = True
     PerceptualLoss_range_norm: bool = True
     PerceptualLoss_perceptual_weight: float = 1.0
-    PerceptualLoss_style_weight: float = 1.0
+    PerceptualLoss_style_weight: float = 0.0
     PerceptualLoss_criterion: str = "l1"
 
     mask_loss_weight: float = 1.0
@@ -80,21 +90,71 @@ class TrainSet:
     # "/opt/share/deepfake/dataset_1/vggface2_hq512",
     # "/opt/share/deepfake/dataset_1/closed_eyes"
     # "/opt/share/deepfake/dataset_1/large_angle"
-
-    image_path = None
+    # "/opt/share/deepfake/all_dataSet/男女混合/aligned" 48170
+    # "/opt/share/deepfake/all_dataSet/男" 5350
+    # "/opt/share/deepfake/all_dataSet/女/aligned"
+    # "/opt/share/deepfake/all_dataSet/黄种人-FFHQ"
+    # "/opt/share/deepfake/all_dataSet/baidu爬取男性45度侧脸及各种风格脸型dst(已经切脸，没有mask)"
+    # "/opt/share/deepfake/all_dataSet/generated_yellow-stylegan2"
+    # "/opt/share/deepfake/lsy-close-eyes" 6042
+    # "/opt/share/deepfake/stars/bcjz/aligned-clean-all"
+    # "/opt/share/deepfake/stars/hsx"
+    # "/opt/share/deepfake/wang_train_data2/大侧脸/renwu_dace"
+    # "/opt/share/deepfake/wang_train_data2/大侧脸/刘亦菲侧脸2"
 
     target_folders = [
-        ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.333333),
-        ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.333333),
-        ("/opt/share/deepfake/dataset_1/vggface2_hq512", 0.333333),
-        # ("/opt/share/deepfake/dataset_1/closed_eyes", 0.25),
-        # ("/opt/share/deepfake/dataset_1/large_angle", 0.25),
+        # ("/opt/share/deepfake/wang_train_data2/大侧脸/刘亦菲侧脸2", 0.0),
+        # ("/opt/share/deepfake/wang_train_data2/大侧脸/renwu_dace", 0.0),
+        # ("/opt/share/deepfake/stars/bcjz/aligned-clean-all", 0.0),
+        # ("/opt/share/deepfake/stars/hsx", 0.0),
+        # ("/opt/share/deepfake/lsy-close-eyes", 0.0),
+        # ("/opt/share/deepfake/all_dataSet/男女混合/aligned", 0.0),
+        # ("/opt/share/deepfake/all_dataSet/baidu爬取男性45度侧脸及各种风格脸型dst(已经切脸，没有mask)", 0.0),
+        ("/opt/share/deepfake/dataset_1/ffhq_1024/realign_arcface_dst", 0.0),
+        # ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.0),
+        # ("/opt/share/deepfake/dataset_1/youtube/Extreme_Beauty_Up_Close_in_4k_UHD_align_results", 0.0),
+        # ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.0),
+        # ("/opt/share/deepfake/dataset_1/vggface2_hq512", 0.0),
     ]
     source_folders = [
-        ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.333333),
-        ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.333333),
-        ("/opt/share/deepfake/dataset_1/vggface2_hq512", 0.333333),
+        # ("/opt/share/deepfake/dataset_1/ffhq_1024", 0.0),
+        # ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024", 0.0),
+        ("/opt/share/deepfake/dataset_1/ffhq_1024/realign_arcface_dst", 0.0),
     ]
+
+    dataset_rando_sample: bool = True
+
+    def print_config(self):
+
+        print("Training Configuration:")
+
+        # 获取所有类属性作为基准
+        class_attrs = {k: v for k, v in self.__class__.__dict__.items() if not k.startswith("_") and not callable(v)}
+
+        # 获取实际的属性值（优先使用实例属性，回退到类属性）
+        attrs = {}
+        for key in class_attrs.keys():
+            if hasattr(self, key):
+                # 使用getattr获取实际值（实例属性优先）
+                attrs[key] = getattr(self, key)
+            else:
+                attrs[key] = class_attrs[key]
+
+        # 计算最长的key长度用于对齐
+        max_key_len = max(len(k) for k in attrs.keys())
+
+        for key, value in sorted(attrs.items()):
+            if isinstance(value, list) and key.endswith("folders"):
+                print(f"  {key:<{max_key_len}} = {len(value)} folders")
+            elif isinstance(value, dict):
+                print(f"  {key:<{max_key_len}} = {{")
+                # 计算字典内最长key的长度
+                max_sub_key_len = max(len(str(k)) for k in value.keys()) if value else 0
+                for sub_key, sub_value in value.items():
+                    print(f"  {'':<{max_key_len}}     {sub_key:<{max_sub_key_len}} = {sub_value}")
+                print(f"  {'':<{max_key_len}} }}")
+            else:
+                print(f"  {key:<{max_key_len}} = {value}")
 
 
 class Trainer:
@@ -105,11 +165,11 @@ class Trainer:
 
         torch.cuda.set_device(cfg.device)
 
-        if cfg.pretrain is None:
+        if cfg.ckpt is None:
             checkpoint = None
         else:
-            print(f"Loading pretrain checkpoint from {cfg.pretrain}")
-            checkpoint = torch.load(cfg.pretrain, map_location=cfg.device, weights_only=False)
+            print(f"Loading checkpoint from {cfg.ckpt}")
+            checkpoint = torch.load(cfg.ckpt, map_location=cfg.device, weights_only=False)
 
         self.loss_dict = {}
 
@@ -157,14 +217,24 @@ class Trainer:
                 for param_group in self.d_optimizer.param_groups:
                     param_group["lr"] = cfg.d_lr
                 print("Loaded d_optimizer state from checkpoint.")
-                print(f"d_optimizer_lr: {self.d_optimizer.param_groups[0]["lr"]}")
 
             if "g_optim" in checkpoint:
                 self.g_optimizer.load_state_dict(checkpoint["g_optim"])
                 for param_group in self.g_optimizer.param_groups:
                     param_group["lr"] = cfg.g_lr
                 print("Loaded g_optimizer state from checkpoint.")
-                print(f"g_optimizer_lr: {self.g_optimizer.param_groups[0]["lr"]}")
+
+        self.scaler_d = GradScaler()
+        self.scaler_g = GradScaler()
+
+        if checkpoint is not None:
+            if "scaler_d" in checkpoint:
+                self.scaler_d.load_state_dict(checkpoint["scaler_d"])
+                print("Loaded scaler_d state from checkpoint.")
+
+            if "scaler_g" in checkpoint:
+                self.scaler_g.load_state_dict(checkpoint["scaler_g"])
+                print("Loaded scaler_g state from checkpoint.")
 
         self.ckpt_dir = os.path.join(cfg.base_log_path, cfg.ckpt_dir)
         self.sample_dir = os.path.join(cfg.base_log_path, cfg.sample_dir)
@@ -186,14 +256,10 @@ class Trainer:
             cfg.PerceptualLoss_criterion,
         ).to(cfg.device)
 
-        self.au_loss = AULoss(weight=cfg.au_loss_weight).to(cfg.device)
-
-        self.arcface = ArcFace().to(cfg.device)
-        self.arcface.eval()
-        self.arcface.requires_grad_(False)
+        self.id_loss = IDLoss(weight=cfg.id_loss_weight).to(device=cfg.device)
 
         pipe = swap_pipe(
-            batch_size=cfg.batch,
+            batch_size=cfg.batch_size,
             num_threads=2,
             prefetch_queue_depth=4,
             py_num_workers=2,
@@ -203,28 +269,17 @@ class Trainer:
             target_folders=cfg.target_folders,
             source_folders=cfg.source_folders,
             same_image_prob=cfg.same_image_prob,
+            rando=cfg.dataset_rando_sample,
         )
 
-        self.loader = DALIGenericIterator(
-            pipelines=pipe, output_map=["tgt", "src", "is_same"], auto_reset=True, last_batch_policy=LastBatchPolicy.DROP
-        )
+        self.loader = DALIGenericIterator(pipelines=pipe, output_map=["tgt", "src", "is_same"], auto_reset=True, last_batch_policy=LastBatchPolicy.DROP)
 
         if cfg.device.index == 0:
             self.writer = SummaryWriter(log_dir=self.tb_log_dir)
 
-        self.scaler_d = GradScaler()
-        self.scaler_g = GradScaler()
+        self.face_pras = FaceParsing.Model().to(device=cfg.device)
 
-        if checkpoint is not None:
-            if "scaler_d" in checkpoint:
-                self.scaler_d.load_state_dict(checkpoint["scaler_d"])
-                print("Loaded scaler_d state from checkpoint.")
-
-            if "scaler_g" in checkpoint:
-                self.scaler_g.load_state_dict(checkpoint["scaler_g"])
-                print("Loaded scaler_g state from checkpoint.")
-
-        self.face_pras = FaceParsing(device=cfg.device)
+        self.cfg.print_config()
 
     def model_ema(self, decay=0.999):
 
@@ -264,8 +319,11 @@ class Trainer:
         data = self.loader.next()[0]
 
         target, source, same = data["tgt"], data["src"], data["is_same"]
-        mask = self.face_pras.process(target)
-        return target, source, mask, same.squeeze()
+
+        target_mask = self.face_pras.process(target)
+        source_mask = self.face_pras.process(source)
+
+        return target, target_mask, source, source_mask, same.squeeze()
 
     def reduce_loss_dict(self):
 
@@ -296,8 +354,8 @@ class Trainer:
         else:
             pbar = itertools.count(start=self.iter)
 
-        mean_path_length = 0
-        torch.cuda.empty_cache()
+        # mean_path_length = 0
+
         # 主训练循环
         for self.iter in pbar:
 
@@ -310,19 +368,20 @@ class Trainer:
 
                 for accum_step in range(cfg.grad_accum_steps):
 
-                    target, source, mask, same = self.fetch_training_batch()
+                    target, target_mask, source, source_mask, same = self.fetch_training_batch()
                     is_r1_reg_every = (self.iter % cfg.r1_reg_every == 0) and (accum_step == cfg.grad_accum_steps - 1)
 
                     with torch.no_grad():
-                        z_id = self.arcface(source)
+                        # z_id = self.arcface(source)
+                        z_id = self.id_loss.compute_id(source, source_mask)
                         fake_img, _, _ = self.net_g(target, z_id)
 
-                    fake_pred = self.net_d(fake_img)
+                    fake_pred, _ = self.net_d(fake_img)
 
                     if is_r1_reg_every:
                         target.requires_grad_(True)
 
-                    real_pred = self.net_d(target)
+                    real_pred, _ = self.net_d(target)
 
                     d_loss = self.gan_loss(real_pred, True, is_disc=True) + self.gan_loss(fake_pred, False, is_disc=True)
 
@@ -352,22 +411,22 @@ class Trainer:
 
                 for accum_step in range(cfg.grad_accum_steps):
 
-                    target, source, mask, same = self.fetch_training_batch()
+                    target, target_mask, source, source_mask, same = self.fetch_training_batch()
                     with torch.no_grad():
-                        z_id = self.arcface(source)
+                        z_id = self.id_loss.compute_id(source, source_mask)
 
-                    fake_img, latents, fake_mask = self.net_g(target, z_id)
+                    fake_img, _, fake_mask = self.net_g(target, z_id)
 
                     # ------------- 对抗损失 -------------
-                    fake_pred = self.net_d(fake_img)
+                    fake_pred, fake_feats = self.net_d(fake_img)
                     g_loss = self.gan_loss(fake_pred, True, is_disc=False)
                     self.loss_dict["G"] = g_loss.detach()
 
                     # ------------- 身份损失 -------------
-                    fake_z_id = self.arcface(fake_img)
-                    id_loss = (1 - torch.cosine_similarity(fake_z_id, z_id)).mean()
-                    self.loss_dict["ID"] = id_loss.detach()
-                    g_loss += id_loss * cfg.id_loss_weight
+                    fake_z_id = self.id_loss.compute_id(fake_img)
+                    id_loss = self.id_loss(fake_z_id, z_id)
+                    g_loss += id_loss
+                    self.loss_dict["ID"] = id_loss.detach() / cfg.id_loss_weight
 
                     # ------------- 感知损失 -------------
                     percep_loss, style_loss = self.perceptualLoss(fake_img, target)
@@ -377,24 +436,32 @@ class Trainer:
                     if style_loss is not None:
                         g_loss += style_loss
                         self.loss_dict["Style"] = style_loss.detach()
+                    # --------------WFM---------------
+                    with torch.no_grad():
+                        _, real_feats = self.net_d(target)
+                    wfm_loss = 0.0
+                    for real_feat, fake_feat in zip(real_feats[4:5], fake_feats[4:5]):
+                        wfm_loss += F.l1_loss(fake_feat, real_feat).mean()
+                    g_loss += wfm_loss * cfg.wfm_weight
+                    self.loss_dict["wfm"] = wfm_loss.detach()
 
                     # ------------- FACS -------------
-                    if self.iter > 500000:
-                        au_loss = self.au_loss(fake_img, target)
-                        g_loss += au_loss
-                        self.loss_dict["AU"] = au_loss.detach()
+                    # if self.iter > 500000:
+                    #     au_loss = self.au_loss(fake_img, target)
+                    #     g_loss += au_loss
+                    #     self.loss_dict["AU"] = au_loss.detach()
 
-                    # ------------- 启发式误差识别细化(FaceShifter) -------------
+                    # ------------- 启发式误差识别细化(FaceShifter HEAR) -------------
                     err_per_sample = torch.abs(fake_img - target).mean(dim=(1, 2, 3))
                     numerator = torch.dot(err_per_sample, same)
                     denominator = same.sum().clamp_min(1e-8)  # 防止除零
                     rec_pix = numerator / denominator
-                    g_loss += rec_pix * cfg.pixel_rec_weight
+                    g_loss += rec_pix * cfg.hear_weight
                     self.loss_dict["Pixel_Rec"] = rec_pix
 
                     # ------------- 掩码损失 -------------
                     with autocast(device_type=DEVICE_TYPE, enabled=False):
-                        mask_loss = F.binary_cross_entropy(fake_mask, mask).mean()
+                        mask_loss = F.binary_cross_entropy(fake_mask, target_mask).mean()
                         self.loss_dict["Mask"] = mask_loss.detach()
                         g_loss += mask_loss * cfg.mask_loss_weight
 
@@ -402,13 +469,13 @@ class Trainer:
                     g_loss = g_loss / cfg.grad_accum_steps
 
                     # 路径正则化
-                    if (self.iter % cfg.path_reg_every == 0) and (accum_step == cfg.grad_accum_steps - 1):
-                        path_loss, mean_path_length, path_lengths = g_path_regularize(fake_img, latents, mean_path_length)
-                        weighted_path_loss = cfg.path_reg_weight * cfg.path_reg_every * path_loss
-                        g_loss += weighted_path_loss
-                        self.loss_dict["path_loss"] = path_loss
-                        self.loss_dict["path_lengths"] = path_lengths.mean()
-                        self.loss_dict["mean_path_length"] = mean_path_length.mean()
+                    # if (self.iter % cfg.path_reg_every == 0) and (accum_step == cfg.grad_accum_steps - 1):
+                    #     path_loss, mean_path_length, path_lengths = g_path_regularize(fake_img, latents, mean_path_length)
+                    #     weighted_path_loss = cfg.path_reg_weight * cfg.path_reg_every * path_loss
+                    #     g_loss += weighted_path_loss
+                    #     self.loss_dict["path_loss"] = path_loss
+                    #     self.loss_dict["path_lengths"] = path_lengths.mean()
+                    #     self.loss_dict["mean_path_length"] = mean_path_length.mean()
 
                     self.scaler_g.scale(g_loss).backward()
 
@@ -420,9 +487,6 @@ class Trainer:
 
             if self.iter % 10 == 0:
                 self.reduce_loss_dict()
-
-            if self.iter % 1000 == 0:
-                torch.cuda.empty_cache()
 
             if cfg.device.index == 0:
                 # 统计所有损失和分数
@@ -448,12 +512,12 @@ class Trainer:
                         fake, _, fake_mask = self.net_g_ema(target, z_id)
                         fake = fake * fake_mask + (1 - fake_mask) * target
                         fake_mask = (fake_mask.repeat(1, 3, 1, 1) - 0.5) / 0.5
-                        mask = (mask.repeat(1, 3, 1, 1) - 0.5) / 0.5
-                        grid = torch.cat((target, source, fake, fake_mask, mask), 0)
+                        target_mask = (target_mask.repeat(1, 3, 1, 1) - 0.5) / 0.5
+                        grid = torch.cat((target, source, fake, fake_mask, target_mask), 0)
                         save_file = os.path.join(self.sample_dir, f"{str(self.iter)}_{cfg.size}.png")
 
                         # 保存样本图像
-                        utils.save_image(grid, save_file, nrow=cfg.batch, normalize=True, value_range=(-1, 1))
+                        utils.save_image(grid, save_file, nrow=cfg.batch_size, normalize=True, value_range=(-1, 1))
 
                 # 定期保存模型
                 if self.iter % cfg.save_ckpt_every == 0:
@@ -463,15 +527,16 @@ class Trainer:
 if __name__ == "__main__":
 
     cfg = TrainSet()
-    cfg.batch = 20
-    cfg.pretrain = "log/train/ckpt/238693_512.pth"
+
+    cfg.base_log_path = "log/train_4"
+    cfg.ckpt = "log/train_4/ckpt/125418_512.pth"
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     is_distributed = world_size > 1
 
     if is_distributed:
         local_rank = int(os.environ["LOCAL_RANK"])
-        print(f"分布式训练: world_size={world_size}, local_rank={local_rank}")
+        print(f"多卡训练: world_size={world_size}, local_rank={local_rank}")
         torch.distributed.init_process_group(backend="nccl", init_method="env://", world_size=world_size)
         cfg.device = torch.device(DEVICE_TYPE, local_rank)
         cfg.is_distributed = is_distributed

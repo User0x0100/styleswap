@@ -3,9 +3,6 @@ import torch
 from torch import autograd as autograd
 from torch import nn as nn
 from torch.nn import functional as F
-
-from losses.arcface import ArcFace
-
 from .vgg import VGGFeatureExtractor
 from .loss_util import weighted_loss
 
@@ -39,10 +36,7 @@ class L1Loss(nn.Module):
     def __init__(self, loss_weight=1.0, reduction="mean"):
         super(L1Loss, self).__init__()
         if reduction not in ["none", "mean", "sum"]:
-            raise ValueError(
-                f"Unsupported reduction mode: {reduction}. "
-                f"Supported ones are: {_reduction_modes}"
-            )
+            raise ValueError(f"Unsupported reduction mode: {reduction}. " f"Supported ones are: {_reduction_modes}")
 
         self.loss_weight = loss_weight
         self.reduction = reduction
@@ -55,9 +49,7 @@ class L1Loss(nn.Module):
             weight (Tensor, optional): of shape (N, C, H, W). Element-wise
                 weights. Default: None.
         """
-        return self.loss_weight * l1_loss(
-            pred, target, weight, reduction=self.reduction
-        )
+        return self.loss_weight * l1_loss(pred, target, weight, reduction=self.reduction)
 
 
 class MSELoss(nn.Module):
@@ -72,10 +64,7 @@ class MSELoss(nn.Module):
     def __init__(self, loss_weight=1.0, reduction="mean"):
         super(MSELoss, self).__init__()
         if reduction not in ["none", "mean", "sum"]:
-            raise ValueError(
-                f"Unsupported reduction mode: {reduction}. "
-                f"Supported ones are: {_reduction_modes}"
-            )
+            raise ValueError(f"Unsupported reduction mode: {reduction}. " f"Supported ones are: {_reduction_modes}")
 
         self.loss_weight = loss_weight
         self.reduction = reduction
@@ -88,9 +77,7 @@ class MSELoss(nn.Module):
             weight (Tensor, optional): of shape (N, C, H, W). Element-wise
                 weights. Default: None.
         """
-        return self.loss_weight * mse_loss(
-            pred, target, weight, reduction=self.reduction
-        )
+        return self.loss_weight * mse_loss(pred, target, weight, reduction=self.reduction)
 
 
 class CharbonnierLoss(nn.Module):
@@ -111,10 +98,7 @@ class CharbonnierLoss(nn.Module):
     def __init__(self, loss_weight=1.0, reduction="mean", eps=1e-12):
         super(CharbonnierLoss, self).__init__()
         if reduction not in ["none", "mean", "sum"]:
-            raise ValueError(
-                f"Unsupported reduction mode: {reduction}. "
-                f"Supported ones are: {_reduction_modes}"
-            )
+            raise ValueError(f"Unsupported reduction mode: {reduction}. " f"Supported ones are: {_reduction_modes}")
 
         self.loss_weight = loss_weight
         self.reduction = reduction
@@ -128,9 +112,7 @@ class CharbonnierLoss(nn.Module):
             weight (Tensor, optional): of shape (N, C, H, W). Element-wise
                 weights. Default: None.
         """
-        return self.loss_weight * charbonnier_loss(
-            pred, target, weight, eps=self.eps, reduction=self.reduction
-        )
+        return self.loss_weight * charbonnier_loss(pred, target, weight, eps=self.eps, reduction=self.reduction)
 
 
 class WeightedTVLoss(L1Loss):
@@ -151,12 +133,8 @@ class WeightedTVLoss(L1Loss):
             y_weight = weight[:, :, :-1, :]
             x_weight = weight[:, :, :, :-1]
 
-        y_diff = super(WeightedTVLoss, self).forward(
-            pred[:, :, :-1, :], pred[:, :, 1:, :], weight=y_weight
-        )
-        x_diff = super(WeightedTVLoss, self).forward(
-            pred[:, :, :, :-1], pred[:, :, :, 1:], weight=x_weight
-        )
+        y_diff = super(WeightedTVLoss, self).forward(pred[:, :, :-1, :], pred[:, :, 1:, :], weight=y_weight)
+        x_diff = super(WeightedTVLoss, self).forward(pred[:, :, :, :-1], pred[:, :, :, 1:], weight=x_weight)
 
         loss = x_diff + y_diff
 
@@ -236,15 +214,9 @@ class PerceptualLoss(nn.Module):
             percep_loss = 0
             for k in x_features.keys():
                 if self.criterion_type == "fro":
-                    percep_loss += (
-                        torch.norm(x_features[k] - gt_features[k], p="fro")
-                        * self.layer_weights[k]
-                    )
+                    percep_loss += torch.norm(x_features[k] - gt_features[k], p="fro") * self.layer_weights[k]
                 else:
-                    percep_loss += (
-                        self.criterion(x_features[k], gt_features[k])
-                        * self.layer_weights[k]
-                    )
+                    percep_loss += self.criterion(x_features[k], gt_features[k]) * self.layer_weights[k]
             percep_loss *= self.perceptual_weight
         else:
             percep_loss = None
@@ -256,8 +228,7 @@ class PerceptualLoss(nn.Module):
                 if self.criterion_type == "fro":
                     style_loss += (
                         torch.norm(
-                            self._gram_mat(x_features[k])
-                            - self._gram_mat(gt_features[k]),
+                            self._gram_mat(x_features[k]) - self._gram_mat(gt_features[k]),
                             p="fro",
                         )
                         * self.layer_weights[k]
@@ -304,9 +275,7 @@ class GANLoss(nn.Module):
             for discriminators.
     """
 
-    def __init__(
-        self, gan_type, real_label_val=1.0, fake_label_val=0.0, loss_weight=1.0
-    ):
+    def __init__(self, gan_type, real_label_val=1.0, fake_label_val=0.0, loss_weight=1.0):
         super(GANLoss, self).__init__()
         self.gan_type = gan_type
         self.loss_weight = loss_weight
@@ -403,12 +372,8 @@ class MultiScaleGANLoss(GANLoss):
     MultiScaleGANLoss accepts a list of predictions
     """
 
-    def __init__(
-        self, gan_type, real_label_val=1.0, fake_label_val=0.0, loss_weight=1.0
-    ):
-        super(MultiScaleGANLoss, self).__init__(
-            gan_type, real_label_val, fake_label_val, loss_weight
-        )
+    def __init__(self, gan_type, real_label_val=1.0, fake_label_val=0.0, loss_weight=1.0):
+        super(MultiScaleGANLoss, self).__init__(gan_type, real_label_val, fake_label_val, loss_weight)
 
     def forward(self, input, target_is_real, is_disc=False):
         """
@@ -441,20 +406,14 @@ def r1_penalty(real_pred, real_img):
     Ref:
     Eq. 9 in Which training methods for GANs do actually converge.
     """
-    grad_real = autograd.grad(
-        outputs=real_pred.sum(), inputs=real_img, create_graph=True
-    )[0]
+    grad_real = autograd.grad(outputs=real_pred.sum(), inputs=real_img, create_graph=True)[0]
     grad_penalty = grad_real.pow(2).view(grad_real.shape[0], -1).sum(1).mean()
     return grad_penalty
 
 
 def g_path_regularize(fake_img, latents, mean_path_length, decay=0.01):
-    noise = torch.randn_like(fake_img) / math.sqrt(
-        fake_img.shape[2] * fake_img.shape[3]
-    )
-    grad = autograd.grad(
-        outputs=(fake_img * noise).sum(), inputs=latents, create_graph=True
-    )[0]
+    noise = torch.randn_like(fake_img) / math.sqrt(fake_img.shape[2] * fake_img.shape[3])
+    grad = autograd.grad(outputs=(fake_img * noise).sum(), inputs=latents, create_graph=True)[0]
     path_lengths = torch.sqrt(grad.pow(2).sum(2).mean(1))
 
     path_mean = mean_path_length + decay * (path_lengths.mean() - mean_path_length)
@@ -523,10 +482,7 @@ class GANFeatLoss(nn.Module):
         elif criterion == "charbonnier":
             self.loss_op = CharbonnierLoss(loss_weight, reduction)
         else:
-            raise ValueError(
-                f"Unsupported loss mode: {criterion}. "
-                f"Supported ones are: l1|l2|charbonnier"
-            )
+            raise ValueError(f"Unsupported loss mode: {criterion}. " f"Supported ones are: l1|l2|charbonnier")
 
         self.loss_weight = loss_weight
 
@@ -537,8 +493,6 @@ class GANFeatLoss(nn.Module):
             # last output is the final prediction, exclude it
             num_intermediate_outputs = len(pred_fake[i]) - 1
             for j in range(num_intermediate_outputs):  # for each layer output
-                unweighted_loss = self.loss_op(
-                    pred_fake[i][j], pred_real[i][j].detach()
-                )
+                unweighted_loss = self.loss_op(pred_fake[i][j], pred_real[i][j].detach())
                 loss += unweighted_loss / num_D
         return loss * self.loss_weight
