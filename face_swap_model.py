@@ -1,12 +1,13 @@
+import itertools
 import math
 import random
-import itertools
+
 import torch
 from torch import nn
 from torch.nn import functional as F
 
-from misc.ops.upfirdn2d import upfirdn2d
 from misc.ops.fused_act import FusedLeakyReLU, fused_leaky_relu
+from misc.ops.upfirdn2d import upfirdn2d
 
 
 class PixelNorm(nn.Module):

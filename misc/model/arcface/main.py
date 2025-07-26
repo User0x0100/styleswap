@@ -1,8 +1,9 @@
-from torch.nn import functional as F
+from pathlib import Path
+
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
-from pathlib import Path
 
 __all__ = ["iresnet18", "iresnet34", "iresnet50", "iresnet100", "iresnet200"]
 using_ckpt = False

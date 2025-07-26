@@ -1,28 +1,27 @@
+import numpy as np
+import scipy.io as sio
 import torch
 import torch.nn as nn
-import numpy as np
 from torchvision import transforms as T
-import scipy.io as sio
-
 # All data parameters import
 from utils.params import ParamsPack
+
 param_pack = ParamsPack()
 
-from backbone_nets import resnet_backbone
-from backbone_nets import mobilenetv1_backbone
-from backbone_nets import mobilenetv2_backbone
-from backbone_nets import ghostnet_backbone
-from backbone_nets.pointnet_backbone import MLP_for, MLP_rev
-import loss_definition
-from loss_definition import ParamLoss, WingLoss
-
-from backbone_nets.ResNeSt import resnest50, resnest101
-import time
-from utils.inference import predict_sparseVert, predict_denseVert, predict_pose, crop_img
-from FaceBoxes import FaceBoxes
-import cv2
-import types
 import os
+import time
+import types
+
+import cv2
+import loss_definition
+from backbone_nets import (ghostnet_backbone, mobilenetv1_backbone,
+                           mobilenetv2_backbone, resnet_backbone)
+from backbone_nets.pointnet_backbone import MLP_for, MLP_rev
+from backbone_nets.ResNeSt import resnest50, resnest101
+from FaceBoxes import FaceBoxes
+from loss_definition import ParamLoss, WingLoss
+from utils.inference import (crop_img, predict_denseVert, predict_pose,
+                             predict_sparseVert)
 
 prefix_path = os.path.abspath(loss_definition.__file__).rsplit('/',1)[0]
 print(prefix_path)

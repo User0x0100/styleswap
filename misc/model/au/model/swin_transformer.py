@@ -5,11 +5,11 @@
 # Written by Ze Liu
 # --------------------------------------------------------
 import os
+
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint as checkpoint
 from timm.layers import DropPath, to_2tuple, trunc_normal_
-
 
 models_dir = os.path.expanduser('pretrain_models')
 model_name = {

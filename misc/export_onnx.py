@@ -1,12 +1,14 @@
 import os
-import onnx
-import torch
+
 import numpy as np
+import onnx
 import onnxruntime as ort
+import torch
 from onnx import checker
 from onnx.checker import ValidationError
-from losses.arcface import ArcFace
+
 from face_swap_model import FullGenerator
+from losses.arcface import ArcFace
 
 
 def export_onnx(model, input, onnx_file: str, opset_version: int = 20) -> None:

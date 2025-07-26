@@ -2,11 +2,13 @@
 # Deep Residual Learning for Image Recognition
 # Kaiming He Xiangyu Zhang Shaoqing Ren Jian Sun
 
-import os
 import math
+import os
+
 import torch
 import torch.nn as nn
 import torchvision.models
+
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152']
 
 # you need to download the models to ~/.torch/models

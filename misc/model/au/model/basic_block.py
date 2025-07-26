@@ -1,6 +1,8 @@
+import math
+
 import torch
 import torch.nn as nn
-import math
+
 
 def bn_init(bn):
     bn.weight.data.fill_(1)

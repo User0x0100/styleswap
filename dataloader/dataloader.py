@@ -1,16 +1,14 @@
 import random
-from nvidia.dali.types import DALIImageType, DALIDataType
-import nvidia.dali.fn as fn
-from nvidia.dali.plugin.pytorch import DALIGenericIterator
-from typing import List, Tuple
-from nvidia.dali.types import Constant
-from nvidia.dali import pipeline_def
-import numpy as np
 import time
-from misc.utils import DataFolder
-
 from typing import List, Tuple, Union
-import math
+
+import numpy as np
+import nvidia.dali.fn as fn
+from nvidia.dali import pipeline_def
+from nvidia.dali.plugin.pytorch import DALIGenericIterator
+from nvidia.dali.types import Constant, DALIDataType, DALIImageType
+
+from misc.utils import DataFolder
 
 
 class ExternalInputIterator(object):
@@ -119,7 +117,9 @@ def swap_pipe(
 
     tgt_raw, src_raw = external_source[0:]
 
-    tgt = fn.decoders.image(tgt_raw, device="mixed", output_type=DALIImageType.RGB, cache_type="largest", hw_decoder_load=0.75)
+    tgt = fn.decoders.image(
+        tgt_raw, device="mixed", output_type=DALIImageType.RGB, cache_type="largest", hw_decoder_load=0.75
+    )
     tgt = fn.resize(tgt, device="gpu", size=resize, dtype=DALIDataType.FLOAT)
 
     if fn.random.coin_flip(probability=flip_prob, dtype=DALIDataType.BOOL):
@@ -139,7 +139,9 @@ def swap_pipe(
     else:
         is_same = Constant(value=0.0, device="gpu", dtype=DALIDataType.FLOAT, shape=[1])
 
-        src = fn.decoders.image(src_raw, device="mixed", output_type=DALIImageType.RGB, cache_type="largest", hw_decoder_load=0.75)
+        src = fn.decoders.image(
+            src_raw, device="mixed", output_type=DALIImageType.RGB, cache_type="largest", hw_decoder_load=0.75
+        )
 
         src = fn.resize(src, device="gpu", size=resize, dtype=DALIDataType.FLOAT)
 
@@ -166,9 +168,10 @@ def swap_pipe(
 if __name__ == "__main__":
 
     import time
-    from torchvision import utils
-    from nvidia.dali.plugin.pytorch import LastBatchPolicy
+
     import torch
+    from nvidia.dali.plugin.pytorch import LastBatchPolicy
+    from torchvision import utils
 
     batch_size = 20
 

@@ -1,17 +1,19 @@
-import os.path as osp
-from pathlib import Path
-import numpy as np
-
-import torch
-import torch.utils.data as data
-import cv2
 import argparse
-from .io import _numpy_to_tensor, _load_cpu
-from .params import *
+import os.path as osp
 import random
-from PIL import Image, ImageEnhance
 import types
+from pathlib import Path
+
+import cv2
+import numpy as np
+import torch
 import torch.nn.functional as F
+import torch.utils.data as data
+from PIL import Image, ImageEnhance
+
+from .io import _load_cpu, _numpy_to_tensor
+from .params import *
+
 
 def img_loader(path):
     return cv2.imread(path, cv2.IMREAD_COLOR)

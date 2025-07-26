@@ -1,14 +1,18 @@
+import math
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 import torch.nn.functional as F
 from torch.autograd import Variable
-import math
-from .swin_transformer import swin_transformer_tiny, swin_transformer_small, swin_transformer_base
-from .resnet import resnet18, resnet50, resnet101
+
+from .basic_block import *
 from .graph import create_e_matrix
 from .graph_edge_model import GEM
-from .basic_block import *
+from .resnet import resnet18, resnet50, resnet101
+from .swin_transformer import (swin_transformer_base, swin_transformer_small,
+                               swin_transformer_tiny)
+
 
 # Gated GCN Used to Learn Multi-dimensional Edge Features and Node Features
 class GNNLayer(nn.Module):

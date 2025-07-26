@@ -1,9 +1,12 @@
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 from utils.params import ParamsPack
+
 param_pack = ParamsPack()
-from math import cos, sin, atan2, asin, sqrt
+from math import asin, atan2, cos, sin, sqrt
+
 import cv2
+
 
 def write_obj(obj_name, vertices, triangles):
     triangles = triangles.copy() # meshlab start with 1

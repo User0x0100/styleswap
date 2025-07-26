@@ -1,8 +1,10 @@
 from pathlib import Path
+
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torchvision import transforms
-import torch.nn.functional as F
+
 from .model.MEFL import MEFARG
 
 
@@ -56,8 +58,9 @@ class AULoss(nn.Module):
 
 
 if __name__ == "__main__":
-    from PIL import Image
     import random
+
+    from PIL import Image
 
     device = torch.device("cuda", 0)
     transform = transforms.Compose(

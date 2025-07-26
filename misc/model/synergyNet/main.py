@@ -1,10 +1,11 @@
-from pathlib import Path
 import types
+from pathlib import Path
+
 import torch
-from .backbone_nets.pointnet_backbone import MLP_for, MLP_rev
-from .backbone_nets.mobilenetv2_backbone import MobileNetV2
 from torch import nn
 
+from .backbone_nets.mobilenetv2_backbone import MobileNetV2
+from .backbone_nets.pointnet_backbone import MLP_for, MLP_rev
 from .utils.params import ParamsPack
 
 param_pack = ParamsPack()
@@ -148,6 +149,7 @@ def draw_landmarks_on_tensor(images, landmarks, color=(0, 1, 0), radius=1):
 if __name__ == "__main__":
 
     import random
+
     import torchvision.utils as utils
     from PIL import Image
     from torchvision import transforms

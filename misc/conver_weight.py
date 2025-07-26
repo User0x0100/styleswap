@@ -1,4 +1,5 @@
 import torch
+
 from face_swap_model import MultiScaleDiscriminator
 
 size = 512

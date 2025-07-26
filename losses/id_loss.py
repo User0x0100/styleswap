@@ -1,7 +1,8 @@
 import torch
-from torch import nn
 import torch.nn.functional as F
-from misc.model import ArcFace, PTS682D
+from torch import nn
+
+from misc.model import PTS682D, ArcFace
 from misc.tools import compute_similarity_transform, pixel_to_normalized
 
 
@@ -58,10 +59,11 @@ class IDLoss(nn.Module):
 
 if __name__ == "__main__":
 
-    from misc.utils import DataFolder, Timer
     import torch
     import torch.nn.functional as F
+
     from misc.model import FaceParsing
+    from misc.utils import DataFolder, Timer
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 2

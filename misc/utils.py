@@ -1,14 +1,14 @@
-from functools import wraps
 import os
 import random
 import time
-from typing import List, Sequence
-from torchvision.io import decode_image
-from torchvision.io.image import ImageReadMode
+from functools import wraps
 from itertools import batched
 from pathlib import Path
+from typing import List, Sequence, Tuple
+
 import torch
-from typing import Tuple
+from torchvision.io import decode_image
+from torchvision.io.image import ImageReadMode
 
 
 class Timer:

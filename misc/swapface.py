@@ -1,32 +1,28 @@
-import os
+import json
 import math
-from itertools import batched
-from typing import Generator, List
-import torch
-from torch import autocast
-from torch import nn
-import torchvision.utils as utils
-from torchvision.io import decode_image, ImageReadMode
-from torchcodec.decoders import VideoDecoder
-from face_swap_model import FullGenerator
-from .utils import DataFolder
-from .model import ArcFace
-from .tools import FaceAlign, tensor2cv_8uc3_bgr
-from misc.model import FaceParsing
-from torch.nn import functional as F
-from pathlib import Path
-import cv2
 import multiprocessing as mp
+import os
+from itertools import batched
+from pathlib import Path
+from typing import Dict, Generator, List, Tuple
 
+import cv2
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
-import math
-import cv2
-from typing import Dict, List, Tuple, Generator
-import json
-
+import torchvision.utils as utils
+from torch import autocast, nn
+from torch.nn import functional as F
+from torchcodec.decoders import VideoDecoder
+from torchvision.io import ImageReadMode, decode_image
 from tqdm import tqdm
+
+from face_swap_model import FullGenerator
+from misc.model import FaceParsing
+
+from .model import ArcFace
+from .tools import FaceAlign, tensor2cv_8uc3_bgr
+from .utils import DataFolder
 
 
 class Swapper(nn.Module):
@@ -191,8 +187,9 @@ class Swapper(nn.Module):
 
 
 if __name__ == "__main__":
-    from misc.utils import DataFolder
     from loguru import logger
+
+    from misc.utils import DataFolder
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"{device=}")

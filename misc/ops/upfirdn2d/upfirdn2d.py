@@ -1,10 +1,10 @@
 import os
-import torch
-from torch.autograd import Function
 from functools import lru_cache
-from torch.utils.cpp_extension import load
+
 import torch
 from torch.amp import custom_fwd
+from torch.autograd import Function
+from torch.utils.cpp_extension import load
 
 _MODULE_PATH = os.path.dirname(__file__)
 build_dir = os.path.join(_MODULE_PATH, "torch_ext_build")

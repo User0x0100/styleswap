@@ -6,11 +6,11 @@ GhostNet: More Features from Cheap Operations By Kai Han, Yunhe Wang, Qi Tian, J
 https://arxiv.org/abs/1911.11907
 Modified from https://github.com/d-li14/mobilenetv3.pytorch and https://github.com/rwightman/pytorch-image-models
 """
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-
 
 __all__ = ['ghostnet']
 

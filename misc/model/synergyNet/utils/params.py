@@ -1,6 +1,9 @@
 import os.path as osp
+
 import numpy as np
+
 from .io import _load
+
 
 def make_abs_path(d):
     return osp.join(osp.dirname(osp.realpath(__file__)), d)

@@ -1,1 +1,2 @@
-from .main import Model, draw_landmarks_on_image, draw_landmarks_on_image_idxs, convert_68_to_5
+from .main import (Model, convert_68_to_5, draw_landmarks_on_image,
+                   draw_landmarks_on_image_idxs)

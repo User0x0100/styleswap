@@ -1,28 +1,21 @@
 import os
+from typing import Dict, List
 
+import cv2
+import matplotlib.pyplot as plt
+import numpy as np
+import PIL.Image as Image
+import torch
+import torchvision.transforms as transforms
+from matplotlib.colors import LinearSegmentedColormap
+from torch.utils.data import DataLoader, RandomSampler
 from torchvision import utils
 
-import torch
-from torch.utils.data import DataLoader, RandomSampler
-import numpy as np
-import matplotlib.pyplot as plt
-import cv2
-
-from matplotlib.colors import LinearSegmentedColormap
-import torchvision.transforms as transforms
-import PIL.Image as Image
-from typing import Dict, List
-from losses.arcface import ArcFace
-from face_swap_model import FullGenerator
-from losses import (
-    GANLoss,
-    L1Loss,
-    PerceptualLoss,
-    r1_penalty,
-    g_path_regularize,
-)
-
 from dataloader.data_loader import FaceDataset
+from face_swap_model import FullGenerator
+from losses import (GANLoss, L1Loss, PerceptualLoss, g_path_regularize,
+                    r1_penalty)
+from losses.arcface import ArcFace
 
 # 全局配置
 CONFIG = {

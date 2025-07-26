@@ -1,1 +1,1 @@
-from .model import GazeHandler,GazeModel
+from .model import GazeHandler, GazeModel

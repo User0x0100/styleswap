@@ -1,10 +1,10 @@
-import torch
-from torch import nn
 from pathlib import Path
-from PIL import ImageDraw, ImageFont
-import torchvision.transforms.functional as TF
-from torch.nn import functional as F
 
+import torch
+import torchvision.transforms.functional as TF
+from PIL import ImageDraw, ImageFont
+from torch import nn
+from torch.nn import functional as F
 
 MODEL_INPUT_SIZE = 256
 
@@ -158,9 +158,10 @@ class Model(nn.Module):
 if __name__ == "__main__":
 
     import random
+    import time
+
     import torchvision.utils as utils
     from torchvision.io import read_image
-    import time
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     batch_size = 2

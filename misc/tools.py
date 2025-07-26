@@ -1,17 +1,18 @@
+import multiprocessing as mp
 from pathlib import Path
-import torchvision.utils as utils
-import torch
-from torch import nn
-import torch.nn.functional as F
-from torch.amp import custom_fwd
-from torch import autocast
-from .model import RetinaFace
-from torchcodec.decoders import VideoDecoder
+
 import cv2
 import numpy as np
-from .utils import Timer
+import torch
+import torch.nn.functional as F
+import torchvision.utils as utils
+from torch import autocast, nn
+from torch.amp import custom_fwd
+from torchcodec.decoders import VideoDecoder
 from tqdm import tqdm
-import multiprocessing as mp
+
+from .model import RetinaFace
+from .utils import Timer
 
 
 @custom_fwd(device_type="cuda", cast_inputs=torch.float)
@@ -542,9 +543,11 @@ class FaceAlign(nn.Module):
 
 
 if __name__ == "__main__":
-    from misc.utils import DataFolder
-    from .model import ArcFace
     from torch import autocast
+
+    from misc.utils import DataFolder
+
+    from .model import ArcFace
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 6

@@ -1,6 +1,6 @@
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 __all__ = ['MLP_for', 'MLP_rev']
 

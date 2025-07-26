@@ -7,8 +7,8 @@ sys.path.append('..')
 import cv2
 import numpy as np
 import scipy.io as sio
-
 from Sim3DR import RenderPipeline
+
 
 def _to_ctype(arr):
     if not arr.flags.c_contiguous:

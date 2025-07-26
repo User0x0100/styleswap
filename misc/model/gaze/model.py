@@ -1,11 +1,11 @@
 import os
+
+import menpo.io as mio
+import numpy as np
+import pytorch_lightning as pl
+import timm
 import torch
 from torch.nn import functional as F
-import pytorch_lightning as pl
-import numpy as np
-
-import timm
-import menpo.io as mio
 
 # https://github.com/deepinsight/insightface/blob/master/reconstruction/gaze/README.md
 
@@ -182,8 +182,9 @@ class GazeHandler:
 # 测试代码
 if __name__ == "__main__":
     import random
-    from torchvision import transforms
+
     from PIL import Image
+    from torchvision import transforms
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 

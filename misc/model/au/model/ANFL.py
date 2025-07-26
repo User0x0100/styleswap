@@ -1,12 +1,15 @@
+import math
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 import torch.nn.functional as F
-import math
-from .swin_transformer import swin_transformer_tiny, swin_transformer_small, swin_transformer_base
-from .resnet import resnet18, resnet50, resnet101
-from .graph import normalize_digraph
+
 from .basic_block import *
+from .graph import normalize_digraph
+from .resnet import resnet18, resnet50, resnet101
+from .swin_transformer import (swin_transformer_base, swin_transformer_small,
+                               swin_transformer_tiny)
 
 
 class GNN(nn.Module):

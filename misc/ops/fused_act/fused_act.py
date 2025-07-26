@@ -1,16 +1,14 @@
 # modify from https://github.com/rosinality/stylegan2-pytorch/blob/master/op/fused_act.py # noqa:E501
 
 import os
-import torch
-from torch import nn
-from torch.autograd import Function
 from functools import lru_cache
-import torch.nn.functional as F
-from torch.utils.cpp_extension import load
-import torch
-from torch import Tensor
 
+import torch
+import torch.nn.functional as F
+from torch import Tensor, nn
 from torch.amp import custom_fwd
+from torch.autograd import Function
+from torch.utils.cpp_extension import load
 
 _MODULE_PATH = os.path.dirname(__file__)
 build_dir = os.path.join(_MODULE_PATH, "torch_ext_build")

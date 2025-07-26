@@ -1,19 +1,22 @@
-import os
 import itertools
-from torchvision import utils
+import os
 from pathlib import Path
+
 import torch
-from face_swap_model import FullGenerator, StyleGAN2Discriminator
-from losses import GANLoss, PerceptualLoss, IDLoss, r1_penalty, g_path_regularize
-from misc.model import FaceParsing
-from torch.nn import functional as F
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
 import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.amp import autocast, GradScaler
-from dataloader import swap_pipe
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
+from torch.amp import GradScaler, autocast
+from torch.nn import functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.tensorboard import SummaryWriter
+from torchvision import utils
+from tqdm import tqdm
+
+from dataloader import swap_pipe
+from face_swap_model import FullGenerator, StyleGAN2Discriminator
+from losses import (GANLoss, IDLoss, PerceptualLoss, g_path_regularize,
+                    r1_penalty)
+from misc.model import FaceParsing
 
 DEVICE_TYPE = "cuda"
 

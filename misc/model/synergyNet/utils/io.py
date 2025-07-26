@@ -1,8 +1,9 @@
 import os
-import numpy as np
-import torch
 import pickle
+
+import numpy as np
 import scipy.io as sio
+import torch
 
 
 def mkdir(d):

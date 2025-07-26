@@ -1,8 +1,10 @@
 from pathlib import Path
+
 import torch
 from torch import nn
-from .bisenet import BiSeNet
 from torch.nn import functional as F
+
+from .bisenet import BiSeNet
 
 
 class Model(nn.Module):
@@ -55,10 +57,11 @@ class Model(nn.Module):
 
 
 if __name__ == "__main__":
-    import time
     import random
-    from torchvision.io import read_image
+    import time
+
     from torchvision import utils
+    from torchvision.io import read_image
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     batch_size = 24

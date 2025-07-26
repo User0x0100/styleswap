@@ -1,22 +1,21 @@
 import itertools
 from collections import OrderedDict
-from typing import List
 from math import ceil
-import torch
-import torch.nn as nn
-import torchvision.models._utils as _utils
-import torch.nn.functional as F
 from pathlib import Path
-import torchvision.models as models
-import torchvision.ops as ops
-
-from .net import MobileNetV1 as MobileNetV1
-from .net import FPN as FPN
-from .net import SSH as SSH
-
 from typing import List, Tuple
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.models as models
+import torchvision.models._utils as _utils
+import torchvision.ops as ops
+
 from misc.utils import Timer
+
+from .net import FPN as FPN
+from .net import SSH as SSH
+from .net import MobileNetV1 as MobileNetV1
 
 
 class ClassHead(nn.Module):
@@ -534,8 +533,9 @@ def get_5pts(result: torch.Tensor):
 
 
 if __name__ == "__main__":
-    from misc.utils import DataFolder, Timer
     import torchvision.utils as utils
+
+    from misc.utils import DataFolder, Timer
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 6
