@@ -249,7 +249,7 @@ class Model(nn.Module):
         self.backend.load_state_dict(torch.load(weight, weights_only=True, map_location=torch.device("cpu")))
 
     def forward(self, x):
-        x = F.interpolate(x, SIZE, mode="bicubic")
+        x = F.interpolate(x, SIZE, mode="bicubic", align_corners=False)
         id = self.backend(x)
         return F.normalize(id, p=2, dim=1)
 

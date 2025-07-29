@@ -92,7 +92,7 @@ class ExternalInputIterator(object):
 
 
 @pipeline_def(enable_conditionals=True)
-def swap_pipe(
+def datasetloader(
     resize: int,
     target_folders: List[Tuple[str, float]],
     source_folders: List[Tuple[str, float]],
@@ -117,9 +117,7 @@ def swap_pipe(
 
     tgt_raw, src_raw = external_source[0:]
 
-    tgt = fn.decoders.image(
-        tgt_raw, device="mixed", output_type=DALIImageType.RGB, cache_type="largest", hw_decoder_load=0.75
-    )
+    tgt = fn.decoders.image(tgt_raw, device="mixed", output_type=DALIImageType.RGB, cache_type="largest", hw_decoder_load=0.75)
     tgt = fn.resize(tgt, device="gpu", size=resize, dtype=DALIDataType.FLOAT)
 
     if fn.random.coin_flip(probability=flip_prob, dtype=DALIDataType.BOOL):
@@ -139,9 +137,7 @@ def swap_pipe(
     else:
         is_same = Constant(value=0.0, device="gpu", dtype=DALIDataType.FLOAT, shape=[1])
 
-        src = fn.decoders.image(
-            src_raw, device="mixed", output_type=DALIImageType.RGB, cache_type="largest", hw_decoder_load=0.75
-        )
+        src = fn.decoders.image(src_raw, device="mixed", output_type=DALIImageType.RGB, cache_type="largest", hw_decoder_load=0.75)
 
         src = fn.resize(src, device="gpu", size=resize, dtype=DALIDataType.FLOAT)
 
@@ -175,7 +171,7 @@ if __name__ == "__main__":
 
     batch_size = 20
 
-    pipe = swap_pipe(
+    pipe = datasetloader(
         batch_size=batch_size,
         num_threads=4,
         prefetch_queue_depth=16,

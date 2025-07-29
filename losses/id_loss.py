@@ -23,7 +23,7 @@ class IDLoss(nn.Module):
 
         self.register_buffer("dst_pts_norm", dst_pts_norm, persistent=False)
 
-    def compute_id(self, face: torch.Tensor, face_mask: torch.Tensor | None = None):
+    def extract_id_feats(self, face: torch.Tensor, face_mask: torch.Tensor | None = None):
         if self.realign:
             with torch.no_grad():
                 B, _, H, W = face.shape
@@ -46,14 +46,10 @@ class IDLoss(nn.Module):
             if face_mask is not None:
                 face = face * face_mask
 
-            # import torchvision.utils as utils
-
-            # utils.save_image(face, "visi.png", normalize=True, value_range=(-1, 1))
-
         return self.arcface(face)
 
     def forward(self, fake_id, real_id):
-        loss = (1 - torch.cosine_similarity(fake_id, real_id)).mean()
+        loss = (1 - F.cosine_similarity(fake_id, real_id)).mean()
         return loss * self.weight
 
 
@@ -80,4 +76,4 @@ if __name__ == "__main__":
 
     mask = facepars.process(data)
 
-    id_loss.compute_id(data, mask)
+    id_loss.extract_id_feats(data, mask)

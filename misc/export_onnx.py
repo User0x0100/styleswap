@@ -8,7 +8,8 @@ from onnx import checker
 from onnx.checker import ValidationError
 
 from face_swap_model import FullGenerator
-from losses.arcface import ArcFace
+
+from .model import ArcFace
 
 
 def export_onnx(model, input, onnx_file: str, opset_version: int = 20) -> None:
@@ -33,22 +34,16 @@ def export_onnx(model, input, onnx_file: str, opset_version: int = 20) -> None:
         print("\n模型信息:")
         print("输入:")
         for input in model.graph.input:
-            print(
-                f"  - {input.name}: {[d.dim_value if d.dim_value else 'dynamic' for d in input.type.tensor_type.shape.dim]}"
-            )
+            print(f"  - {input.name}: {[d.dim_value if d.dim_value else 'dynamic' for d in input.type.tensor_type.shape.dim]}")
         print("输出:")
         for output in model.graph.output:
-            print(
-                f"  - {output.name}: {[d.dim_value if d.dim_value else 'dynamic' for d in output.type.tensor_type.shape.dim]}"
-            )
+            print(f"  - {output.name}: {[d.dim_value if d.dim_value else 'dynamic' for d in output.type.tensor_type.shape.dim]}")
     except ValidationError as e:
         print("❌ ONNX模型验证失败：")
         print(e)
 
 
-def compare_model_accuracy(
-    pytorch_model, onnx_file, pytorch_device="cpu", onnx_device="cpu", num_tests=10
-):
+def compare_model_accuracy(pytorch_model, onnx_file, pytorch_device="cpu", onnx_device="cpu", num_tests=10):
     """
     对比PyTorch模型与ONNX模型的推理精度差距
 
@@ -120,17 +115,11 @@ def compare_model_accuracy(
             for spec in input_specs:
                 # 生成随机输入数据
                 if "float" in spec["type"]:
-                    test_data = torch.randn(
-                        spec["shape"], dtype=torch.float32, device=pytorch_device
-                    )
+                    test_data = torch.randn(spec["shape"], dtype=torch.float32, device=pytorch_device)
                 elif "int" in spec["type"]:
-                    test_data = torch.randint(
-                        0, 100, spec["shape"], dtype=torch.int64, device=pytorch_device
-                    )
+                    test_data = torch.randint(0, 100, spec["shape"], dtype=torch.int64, device=pytorch_device)
                 else:
-                    test_data = torch.randn(
-                        spec["shape"], dtype=torch.float32, device=pytorch_device
-                    )
+                    test_data = torch.randn(spec["shape"], dtype=torch.float32, device=pytorch_device)
 
                 test_inputs.append(test_data)
                 onnx_inputs[spec["name"]] = test_data.cpu().numpy()
@@ -149,9 +138,7 @@ def compare_model_accuracy(
             onnx_outputs = ort_session.run(None, onnx_inputs)
 
             # 对比每个输出
-            for i, (pytorch_out, onnx_out) in enumerate(
-                zip(pytorch_outputs, onnx_outputs)
-            ):
+            for i, (pytorch_out, onnx_out) in enumerate(zip(pytorch_outputs, onnx_outputs)):
                 output_name = output_specs[i]["name"]
 
                 # 转换为numpy
@@ -162,9 +149,7 @@ def compare_model_accuracy(
 
                 # 确保形状匹配
                 if pytorch_out_np.shape != onnx_out.shape:
-                    print(
-                        f"⚠️  输出{i}形状不匹配: PyTorch {pytorch_out_np.shape} vs ONNX {onnx_out.shape}"
-                    )
+                    print(f"⚠️  输出{i}形状不匹配: PyTorch {pytorch_out_np.shape} vs ONNX {onnx_out.shape}")
                     continue
 
                 # 计算误差指标
@@ -176,9 +161,7 @@ def compare_model_accuracy(
                 pytorch_flat = pytorch_out_np.flatten()
                 onnx_flat = onnx_out.flatten()
                 if np.linalg.norm(pytorch_flat) > 0 and np.linalg.norm(onnx_flat) > 0:
-                    cosine_sim = np.dot(pytorch_flat, onnx_flat) / (
-                        np.linalg.norm(pytorch_flat) * np.linalg.norm(onnx_flat)
-                    )
+                    cosine_sim = np.dot(pytorch_flat, onnx_flat) / (np.linalg.norm(pytorch_flat) * np.linalg.norm(onnx_flat))
                 else:
                     cosine_sim = 1.0 if np.allclose(pytorch_flat, onnx_flat) else 0.0
 
@@ -276,7 +259,7 @@ def export_arcface(
         num_tests: 精度测试次数
     """
     input = torch.randn(1, 3, 112, 112, dtype=torch.float32, device=device)
-    arcface = ArcFace(fp16=False).to(device)
+    arcface = ArcFace.Model(fp16=False).to(device)
 
     # 导出ONNX模型
     export_onnx(arcface, input, onnx_file)
@@ -321,7 +304,7 @@ def export_face_model(
         onnx_device: ONNX模型推理设备 (默认为'cpu')
         num_tests: 精度测试次数
     """
-    model = FullGenerator(size=size).to(device)
+    model = FullGenerator(size=size, isconcat=False).to(device)
     checkpoint = torch.load(checkpoint, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["g_ema"])
 
@@ -352,31 +335,31 @@ def export_face_model(
 if __name__ == "__main__":
 
     size = 512
-    checkpoint = "ckpt/45000_512.pth"
+    checkpoint = "log/train_6/ckpt/5000_512.pth"
     face_onnx_file = "onnx_model/styleswap_512_ffhq.onnx"
     arcface_onnx_file = "onnx_model/glint360k_r50_fp16.onnx"
 
     # 导出ArcFace模型并对比精度
-    export_arcface(
-        arcface_onnx_file,
-        device="cuda",
-        compare_accuracy=True,
-        pytorch_device="cuda",
-        onnx_device="cuda",
-        num_tests=200,
-    )
+    # export_arcface(
+    #     arcface_onnx_file,
+    #     device="cuda",
+    #     compare_accuracy=True,
+    #     pytorch_device="cuda",
+    #     onnx_device="cuda",
+    #     num_tests=200,
+    # )
 
     # 示例：在不同设备上进行对比
     # export_arcface(arcface_onnx_file, device="cuda", compare_accuracy=True,
     #               pytorch_device="cuda", onnx_device="cuda")
 
-    # export_face_model(
-    #     size,
-    #     face_onnx_file,
-    #     checkpoint,
-    #     device="cpu",
-    #     compare_accuracy=True,
-    #     pytorch_device="cuda",
-    #     onnx_device="cuda",
-    #     num_tests=100,
-    # )
+    export_face_model(
+        size,
+        face_onnx_file,
+        checkpoint,
+        device="cpu",
+        compare_accuracy=True,
+        pytorch_device="cuda",
+        onnx_device="cuda",
+        num_tests=5,
+    )

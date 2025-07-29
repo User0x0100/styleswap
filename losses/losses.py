@@ -1,4 +1,5 @@
 import math
+from typing import Dict
 
 import torch
 from torch import autograd as autograd
@@ -498,3 +499,48 @@ class GANFeatLoss(nn.Module):
                 unweighted_loss = self.loss_op(pred_fake[i][j], pred_real[i][j].detach())
                 loss += unweighted_loss / num_D
         return loss * self.loss_weight
+
+
+class WFMLoss(nn.Module):
+    def __init__(self, feat_weights: Dict[int, float], wfm_weight: float = 1.0):
+        """
+        :param feat_weights: 字典，键为特征图层索引，值为该层的损失权重
+        :param wfm_weight: 最终加权因子
+        """
+        super().__init__()
+        self.feat_weights = feat_weights
+        self.wfm_weight = wfm_weight
+
+    def forward(self, fake_feats: list[torch.Tensor], real_feats: list[torch.Tensor]) -> torch.Tensor:
+        """
+        :param fake_feats: 生成图像提取的特征列表
+        :param real_feats: 目标图像提取的特征列表
+        :return: 加权后的总损失
+        """
+        loss = 0.0
+        for idx, weight in self.feat_weights.items():
+            loss += F.l1_loss(fake_feats[idx], real_feats[idx], reduction="mean") * weight
+        return loss * self.wfm_weight
+
+
+class HEARLoss(nn.Module):
+    def __init__(self, weight: float = 1.0):
+        """
+        :param weight: 总损失乘以的权重因子
+        """
+        super().__init__()
+        self.weight = weight
+
+    def forward(self, fake_img: torch.Tensor, target: torch.Tensor, same: torch.Tensor) -> torch.Tensor:
+        """
+        :param fake_img: 生成图像，形状 [B, C, H, W]
+        :param target: 目标图像，形状 [B, C, H, W]
+        :param same: 指示是否是“同一人”的标志，形状 [B]，值为0或1，相同为1
+        :return: 加权后的像素重建损失（仅对 same==1 的样本起作用）
+        """
+        same = same.float()
+        err_per_sample = torch.abs(fake_img - target).mean(dim=(1, 2, 3))
+        numerator = torch.dot(err_per_sample, same)
+        denominator = same.sum().clamp_min(1e-8)
+        loss = numerator / denominator
+        return loss * self.weight

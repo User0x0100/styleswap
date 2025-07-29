@@ -1,20 +1,13 @@
-import json
-import math
 import multiprocessing as mp
-import os
-from itertools import batched
 from pathlib import Path
-from typing import Dict, Generator, List, Tuple
 
 import cv2
-import numpy as np
 import torch
 import torch.nn.functional as F
-import torchvision.utils as utils
 from torch import autocast, nn
 from torch.nn import functional as F
 from torchcodec.decoders import VideoDecoder
-from torchvision.io import ImageReadMode, decode_image
+from torchvision.io import decode_image
 from tqdm import tqdm
 
 from face_swap_model import FullGenerator
@@ -28,14 +21,20 @@ from .utils import DataFolder
 class Swapper(nn.Module):
     def __init__(self, ckpt: str, size: int = 512, isconcat: bool = False, align_dst: None | torch.Tensor = None):
         super().__init__()
+
+        checkpoint = torch.load(ckpt, map_location=torch.device("cpu"), weights_only=False)
+
+        if not "g_ema" in checkpoint:
+            available_keys = list(checkpoint.keys())
+            raise KeyError(f"'g_ema' not found in checkpoint. Available keys: {available_keys}")
+
+        if "config" in checkpoint:
+            isconcat = checkpoint["train_info"]["isconcat"]
+
         self.size = size
         self.swap_net = FullGenerator(size=size, isconcat=isconcat)
-        checkpoint = torch.load(ckpt, map_location=torch.device("cpu"), weights_only=False)
-        if "g_ema" in checkpoint:
-            self.swap_net.load_state_dict(checkpoint["g_ema"])
-        else:
-            print(f"There is no 'g_ema' in the checkpoint. Keys: {checkpoint.keys()}")
-            return KeyError
+        self.swap_net.load_state_dict(checkpoint["g_ema"], strict=False)
+
         self.swap_net.eval()
         self.swap_net.requires_grad_(False)
 
@@ -61,7 +60,7 @@ class Swapper(nn.Module):
         B = aligned_faces.shape[0]
         id = id.expand(B, -1)
 
-        fake_face, _, fake_mask = self.swap_net(aligned_faces, id)
+        fake_face, _, fake_mask = self.swap_net(aligned_faces, id, noise_blank_level=9)
         fake_face = fake_face * fake_mask + (1 - fake_mask) * aligned_faces
         return fake_face
 
@@ -106,7 +105,7 @@ class Swapper(nn.Module):
 
             for fake, name in zip(swaped_face, fns):
                 fake_id = self.arcface(fake.unsqueeze(0))
-                similarity = F.cosine_similarity(fake_id, id_emb.expand(fake_id.shape[0], -1))
+                similarity = F.cosine_similarity(fake_id, id_emb.expand(fake_id.shape[0], -1), dim=1)
                 print(f"相似度: {similarity.mean():.4f} --- {name}")
                 similarity_collect.append(similarity)
 
@@ -197,20 +196,20 @@ if __name__ == "__main__":
     # dataset = DataFolder("IDAssets")
     logger.info(f"{dataset=}")
 
-    ckpt = "log/train_4/ckpt/150000_512.pth"
+    ckpt = "log/train_6/ckpt/25000_512.pth"
     logger.info(f"{ckpt=}")
 
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-02-17(袁忠 曹属馨)/20230217-160724910曹属馨(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-06-20(邓叮玲 许馨文)/20230620-155807793邓叮玲(电脑录屏).mp4"
-    # target = "/opt/share/deepfake/linshi/录屏素材/2023-08-28(李小姐 邱小姐)/20230828-122302李小姐(电脑录屏).mp4"
+    target = "/opt/share/deepfake/linshi/录屏素材/2023-08-28(李小姐 邱小姐)/20230828-122302李小姐(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2025-07-03(蒋女士 林嘉惠 王钰 符媛媛 石星儿)/王钰(电脑录屏).mp4"
-    target = "IDAssets/抖音-记录美好生活 (1).mp4"
+    # target = "IDAssets/抖音-记录美好生活.mp4"
 
     # source = dataset.sample(rando=True)
-    source = "IDAssets/jay_c.webp"
+    source = "IDAssets/Henry_Cavill.webp"
     logger.info(f"{source=}")
-    # /opt/share/deepfake/stable-diffusion/face_editor_test/高清数据/Twilight/twilight/全/1_A woman
+
     swap = Swapper(ckpt).to(device=device)
-    swap.swap_folder("/opt/share/deepfake/stable-diffusion/face_editor_test/高清数据/Twilight/twilight/全/1_A woman", wfp="woman")
+    swap.swap_folder("IDAssets")
     # swap.swap_video(target, source)

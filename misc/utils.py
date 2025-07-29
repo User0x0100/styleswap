@@ -2,11 +2,12 @@ import os
 import random
 import time
 from functools import wraps
-from itertools import batched
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import List, Sequence
 
 import torch
+from torch import nn
+from torch.nn import functional as F
 from torchvision.io import decode_image
 from torchvision.io.image import ImageReadMode
 

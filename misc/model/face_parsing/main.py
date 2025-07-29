@@ -46,7 +46,6 @@ class Model(nn.Module):
         H, W = image.size()[2:]
         image = F.interpolate(image, [512, 512], mode="bicubic")
         if self.range_norm:
-            # image = (image + 1) / 2
             image.add_(1.0).div_(2.0)
 
         image.sub_(self.mean).div_(self.std)

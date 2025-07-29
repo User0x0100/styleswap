@@ -242,7 +242,7 @@ def invert_normalized_theta(theta: torch.Tensor) -> torch.Tensor:
     return inv_theta
 
 
-def tensor2cv_8uc3_bgr(image: torch.Tensor, value_range=(-1, 1)) -> np.ndarray:
+def tensor2cv_8uc3_bgr(image: torch.Tensor, value_range=(-1, 1), swap_rb_ch: bool = True) -> np.ndarray:
     """
     将形如 [C, H, W] 或 [B, C, H, W] 的图像 Tensor 转为 OpenCV 使用的 uint8 BGR 格式。
 
@@ -268,7 +268,8 @@ def tensor2cv_8uc3_bgr(image: torch.Tensor, value_range=(-1, 1)) -> np.ndarray:
     image = image.clamp(0, 1).mul(255)
 
     # RGB -> BGR
-    image = image[:, [2, 1, 0], ...]
+    if swap_rb_ch:
+        image = image[:, [2, 1, 0], ...]
 
     # 转为 NHWC 格式并 uint8
     image = image.permute(0, 2, 3, 1).to(device="cpu", dtype=torch.uint8).numpy()
@@ -377,6 +378,8 @@ class FaceAlign(nn.Module):
             if N == 0:
                 outputs.append(org_image)
                 continue
+
+            org_image = org_image.unsqueeze(0)
 
             grid = F.affine_grid(inv_aff_mat[slic_n : slic_n + N], [N] + list(org_image.shape[1:]), align_corners=False)
 
@@ -575,7 +578,7 @@ if __name__ == "__main__":
 
     vfp = "/opt/share/deepfake/dataset_1/youtube/4k_Face_Close_Up_HDR_Video_Vivid_Colors_Ambient_Sound_-_Relaxing.webm"
     dst_pts_pixel = ArcFace.get_dst_pts(512).to(device=device)
-    aligner.video_face_ext(vfp=vfp, dst_pts_pixel=dst_pts_pixel, out_size=(512,) * 2, batch_size=128, conf_thresh=0.95, min_box_size=384)
+    aligner.video_face_ext(vfp=vfp, dst_pts_pixel=dst_pts_pixel, out_size=(512,) * 2, batch_size=128, conf_thresh=0.95, min_box_size=512)
 
     # dst_pts_pixel = ArcFace.get_dst_pts(512).to(device=device)
     # aligner.align_folder(
