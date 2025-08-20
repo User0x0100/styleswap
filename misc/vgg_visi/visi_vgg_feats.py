@@ -8,7 +8,7 @@ from torchvision.models import VGG19_Weights, vgg19
 
 from misc.utils import DataFolder
 
-size = 512
+size = 1024
 batch_size = 2
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -30,7 +30,7 @@ for module in vggnet.features:
 
 from losses.vgg import NAMES
 
-save_folder = Path(__name__).with_name("result")
+save_folder = Path(__name__).with_name("vgg_visi_result")
 save_folder.mkdir(parents=True, exist_ok=True)
 
 for layer_n, feat in zip(NAMES["vgg19"], feats):

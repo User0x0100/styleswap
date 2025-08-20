@@ -1,6 +1,6 @@
-import itertools
 import math
 import random
+from typing import List
 
 import torch
 from torch import Tensor, nn
@@ -422,16 +422,23 @@ class Generator(nn.Module):
         return self.style(input)
 
     def conver_noise_withmask(self, noise: Tensor, mask: Tensor):
-        att_msk = mask
-        masked_img = noise * att_msk
-        color_sum = torch.sum(masked_img, (2, 3))
-        mask_sum = torch.sum(att_msk, (2, 3))
-        ratio = color_sum / mask_sum
-        ratio = ratio.unsqueeze(2).unsqueeze(3)
-        ratio_mask = ratio * att_msk + (1 - att_msk) * noise
-        return ratio_mask
+        color_sum = (noise * mask).sum(dim=(2, 3), keepdim=True)
+        mask_sum = mask.sum(dim=(2, 3), keepdim=True)
+        ratio = color_sum / mask_sum.clamp_min(1e-8)
+        out = torch.lerp(noise, ratio, mask)
+        return out
 
-    def forward(self, styles: Tensor, return_latents=True, inject_index=None, truncation=1, truncation_latent=None, input_is_latent=False, noise=None, noise_blank_level=9):
+    def forward(
+        self,
+        styles: List[Tensor],
+        return_latents=True,
+        inject_index=None,
+        truncation=1,
+        truncation_latent=None,
+        input_is_latent=False,
+        noise: List[Tensor] | None = None,
+        noise_blank_level=9,
+    ):
 
         if not input_is_latent:
             styles = [self.style(s) for s in styles]
@@ -594,7 +601,7 @@ class FullGenerator(nn.Module):
 
         outs = self.final_linear(id_emb)
 
-        noise = list(itertools.chain.from_iterable(itertools.repeat(x, 2) for x in noise))[::-1]
+        noise = [x for x in noise for _ in range(2)][::-1]
         out_img, latent, mask = self.generator(
             [outs], return_latents, inject_index, truncation, truncation_latent, input_is_latent, noise=noise[1:], noise_blank_level=noise_blank_level
         )
@@ -650,9 +657,9 @@ class StyleGAN2Discriminator(nn.Module):
         self.stddev_group = stddev_group
         self.stddev_feat = 1
 
-    def get_feats(self, x: Tensor):
+    def feature_maps(self, x: Tensor):
 
-        feats = []
+        feats: List[Tensor] = []
         for conv in self.conv_body:
             x = conv(x)
             feats.append(x)
@@ -748,7 +755,7 @@ if __name__ == "__main__":
     input = input.to(device=device, dtype=torch.float).unsqueeze_(0).div_(255.0).mul_(2.0).sub_(1.0)
     input = F.interpolate(input, size=size, mode="bicubic")
 
-    pred, feats = d(input)
+    feats = d.feature_maps(input)
 
     for idx, feat in enumerate(feats):
         img = feat.mean(dim=1, keepdim=True)

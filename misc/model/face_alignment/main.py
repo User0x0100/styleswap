@@ -133,6 +133,8 @@ class Model(nn.Module):
         self.swap_rb = swap_rb
         self.pts_dst_size = pts_dst_size
         self.net = torch.jit.load(Path(__file__).with_name("2DFAN4-cd938726ad.zip"))
+        self.eval()
+        self.requires_grad_(False)
 
     def forward(self, face: torch.Tensor):
 

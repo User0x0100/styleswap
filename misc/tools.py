@@ -292,6 +292,9 @@ class FaceAlign(nn.Module):
         self.eval()
         self.requires_grad_(False)
 
+    def get_device(self) -> torch.device:
+        return self.device.device
+
     @staticmethod
     def align_with(images: list[torch.Tensor] | torch.Tensor, src_pts5_pixel: torch.Tensor, idxs: List[int], out_size: tuple[int, int], dst_pts5_pixel: torch.Tensor):
 
@@ -308,10 +311,10 @@ class FaceAlign(nn.Module):
             image = image.unsqueeze(0).expand(N, -1, -1, -1)
             C = image.shape[1]
 
-            mat = normalize_theta(mats[slic_n : slic_n + N], image.shape[-2:], out_size)
+            mat = normalize_theta(mats[slic_n : slic_n + N], image.shape[-2:], out_size, align_corners=False)
 
-            grid = F.affine_grid(mat, (N, C, *out_size), align_corners=True)
-            aligned = F.grid_sample(image, grid, align_corners=True, mode="bicubic")
+            grid = F.affine_grid(mat, (N, C, *out_size), align_corners=False)
+            aligned = F.grid_sample(image, grid, align_corners=False, mode="bicubic")
 
             aligned_list.append(aligned)
             norm_theata.append(mat)
@@ -356,12 +359,13 @@ class FaceAlign(nn.Module):
         results, idxs = self.detector.detector(images, conf_thresh, min_box_size)  # results [N, 15]
 
         all_pts5 = RetinaFace.get_5pts(results)  # [N, 5, 2]
-        aligned, norm_theata = self.align_with(images, all_pts5, idxs, out_size, dst_pts5_pixel)
+        aligned, norm_theata = FaceAlign.align_with(images, all_pts5, idxs, out_size, dst_pts5_pixel)
         return aligned, norm_theata, idxs
 
     @autocast(device_type="cuda")
+    @staticmethod
     def restore_faces_to_original(
-        self, align_faces: torch.Tensor, aff_matrix: torch.Tensor, org_images: list[torch.Tensor] | torch.Tensor, idxs: list[int], face_masks: torch.Tensor | None = None
+        align_faces: torch.Tensor, aff_matrix: torch.Tensor, org_images: list[torch.Tensor] | torch.Tensor, idxs: list[int], face_masks: torch.Tensor | None = None
     ):
         inv_aff_mat = invert_normalized_theta(aff_matrix)
 
@@ -384,7 +388,7 @@ class FaceAlign(nn.Module):
             grid = F.affine_grid(inv_aff_mat[slic_n : slic_n + N], [N] + list(org_image.shape[1:]), align_corners=False)
 
             faces_on_canvas = F.grid_sample(align_faces[slic_n : slic_n + N], grid, padding_mode="zeros", align_corners=False, mode="bicubic")
-            mask_on_canvas = F.grid_sample(face_masks[slic_n : slic_n + N], grid, padding_mode="zeros", align_corners=False, mode="bicubic")
+            mask_on_canvas = F.grid_sample(face_masks[slic_n : slic_n + N], grid, padding_mode="zeros", align_corners=False, mode="nearest")
 
             # 聚合多张人脸到单张
             sum_faces = (faces_on_canvas * mask_on_canvas).sum(dim=0, keepdim=True)  # [1, C, H, W]
@@ -442,7 +446,7 @@ class FaceAlign(nn.Module):
 
         Path(wfp).mkdir(exist_ok=True, parents=True)
 
-        device = self.device.device
+        device = self.get_device()
         self.detector.from_normalized = False
         self.detector.from_unit_range = False
 
@@ -452,7 +456,7 @@ class FaceAlign(nn.Module):
         mp.set_start_method("spawn", force=True)
 
         q = mp.Queue(maxsize=10)
-        p = mp.Process(target=self.video_face_ext_save_worker, args=(q, wfp, sf_prefix, (0, 255)))
+        p = mp.Process(target=self.video_face_ext_save_worker, args=(q, wfp, sf_prefix, (0, 255)), daemon=True)
         p.start()
 
         pbar = tqdm(range(num_frames), unit="frame")
@@ -511,7 +515,7 @@ class FaceAlign(nn.Module):
         min_box_size: int = 256,
     ):
 
-        device = self.device.device
+        device = self.get_device()
         self.detector.from_normalized = False
         self.detector.from_unit_range = False
 
@@ -521,7 +525,7 @@ class FaceAlign(nn.Module):
 
         mp.set_start_method("spawn", force=True)
         q = mp.Queue(maxsize=10)
-        p = mp.Process(target=self.align_folder_save_worker, args=(q, sfp, sf_prefix, (0, 255)))
+        p = mp.Process(target=self.align_folder_save_worker, args=(q, sfp, sf_prefix, (0, 255)), daemon=True)
         p.start()
 
         dataset = DataFolder(fp)
@@ -571,21 +575,21 @@ if __name__ == "__main__":
     #     with Timer():
     #         aligned, M, idxs = aligner.align(images, (out_size, out_size), arc_dst)
 
-    # restored = aligner.restore_faces_to_original(aligned, M, images, idxs)
+    # restored = FaceAlign.restore_faces_to_original(aligned, M, images, idxs)
 
     # for idx, image in enumerate(restored):
     #     utils.save_image(image, f"visi_aligned{str(idx)}.png", normalize=True, value_range=(0, 1))
 
-    vfp = "/opt/share/deepfake/dataset_1/youtube/4k_Face_Close_Up_HDR_Video_Vivid_Colors_Ambient_Sound_-_Relaxing.webm"
-    dst_pts_pixel = ArcFace.get_dst_pts(512).to(device=device)
-    aligner.video_face_ext(vfp=vfp, dst_pts_pixel=dst_pts_pixel, out_size=(512,) * 2, batch_size=128, conf_thresh=0.95, min_box_size=512)
-
+    # vfp = "/opt/share/deepfake/dataset_1/youtube/4k_Face_Close_Up_HDR_Video_Vivid_Colors_Ambient_Sound_-_Relaxing.webm"
     # dst_pts_pixel = ArcFace.get_dst_pts(512).to(device=device)
-    # aligner.align_folder(
-    #     fp="/opt/share/deepfake/dataset_1/ffhq_1024",
-    #     dst_pts_pixel=dst_pts_pixel,
-    #     sfp="/opt/share/deepfake/dataset_1/ffhq_1024/realign_arcface_dst",
-    #     batch_size=64,
-    #     out_size=(512,) * 2,
-    #     min_box_size=384,
-    # )
+    # aligner.video_face_ext(vfp=vfp, dst_pts_pixel=dst_pts_pixel, out_size=(512,) * 2, batch_size=128, conf_thresh=0.95, min_box_size=512)
+
+    dst_pts_pixel = ArcFace.get_dst_pts(512).to(device=device)
+    aligner.align_folder(
+        fp="/opt/share/deepfake/dataset_1/vggface2_hq512",
+        dst_pts_pixel=dst_pts_pixel,
+        sfp="/opt/share/deepfake/dataset_1/vggface2_hq512/realign_arcface_dst",
+        batch_size=64,
+        out_size=(512,) * 2,
+        min_box_size=384,
+    )

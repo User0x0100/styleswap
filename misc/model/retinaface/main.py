@@ -328,7 +328,7 @@ class Model(nn.Module):
         if resize is None:
             resize = torch.ones((B, 1), dtype=torch.float, device=device)
 
-        W, H = image_shape[1], image_shape[0]
+        H, W = image_shape
         inv_resize = 1.0 / resize
 
         results: List[torch.Tensor] = []
@@ -339,7 +339,6 @@ class Model(nn.Module):
 
             mask = scores > conf_thresh
             if mask.sum() == 0:
-                # results.append(torch.empty((0, 15), device=device))
                 idxs.append(0)
                 continue
 
@@ -353,12 +352,12 @@ class Model(nn.Module):
             size_mask = (widths >= min_box_size) & (heights >= min_box_size)
 
             if size_mask.sum() == 0:
-                # results.append(torch.empty((0, 15), device=device))
                 idxs.append(0)
                 continue
 
             boxes_b = boxes_b[size_mask]
             scores_b = scores[mask][size_mask]
+
             landms_b = decode_landmarks(landms[b][mask][size_mask], priors[mask][size_mask], cfg["variance"])
             landms_b[:, 0::2] *= W * inv_resize[b]
             landms_b[:, 1::2] *= H * inv_resize[b]
@@ -369,14 +368,16 @@ class Model(nn.Module):
             landms_b = landms_b[keep]
             scores_b = scores_b[keep].unsqueeze(1)
 
-            out = torch.cat([boxes_b, scores_b, landms_b], dim=1)  # [K, 15]
-            idxs.append(len(out))
-            results.append(out)
+            detection = torch.cat([boxes_b, scores_b, landms_b], dim=1)  # [K, 15]
+            idxs.append(len(detection))
+            results.append(detection)
 
         if len(results) == 0:
+
             return torch.empty(0, 15, device=device), idxs
 
-        return torch.cat(results), idxs
+        all_detections = torch.cat(results, dim=0)
+        return all_detections, idxs
 
 
 def batch_resize_and_pad_varsize(imgs: List[torch.Tensor], out_h: int, out_w: int) -> Tuple[torch.Tensor, torch.Tensor]:
