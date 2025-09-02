@@ -66,7 +66,7 @@ class TrainSet:
     path_reg_every: int = 64
     path_reg_weight: float = 0.1
 
-    gan_type: str = "hinge"
+    gan_type: str = "wgan_softplus"
     gan_loss_weight: float = 1.0
 
     id_encode_provider: IDEncoder.PROVIDER = IDEncoder.PROVIDER.ARC_OFFICIAL
@@ -154,10 +154,10 @@ class Trainer:
     def __init__(self, cfg: TrainSet):
 
         torch.cuda.set_device(cfg.device)
-        torch.backends.cudnn.benchmark = True
-        torch.set_float32_matmul_precision("high")
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+        # torch.backends.cudnn.benchmark = True
+        # torch.set_float32_matmul_precision("high")
+        # torch.backends.cuda.matmul.allow_tf32 = True
+        # torch.backends.cudnn.allow_tf32 = True
         print(f"AMP_DTYPE: {AMP_DTYPE}")
 
         self.cfg = cfg
@@ -258,6 +258,7 @@ class Trainer:
                 print("Loaded g_optimizer state from checkpoint.")
 
         # ------------------------ init AMP GradScaler ------------------------
+        # bf16 不需要 GradScaler fp16 需要
         enable_scaler = True if AMP_DTYPE == torch.float16 else False
         self.scaler_d = GradScaler(enabled=enable_scaler)
         self.scaler_g = GradScaler(enabled=enable_scaler)
@@ -532,7 +533,7 @@ class Trainer:
 
                     # ------------- 启发式误差识别细化(FaceShifter HEAR) -------------
                     if cfg.enable_hear:
-                        rec_pix = self.hear_loss(fake_img, target, same)
+                        rec_pix = self.hear_loss(fake_img, target, same, mask=target_mask, p=cfg.same_prob)
                         g_loss += rec_pix
                         self.loss_dict["Pixel_Rec"] = rec_pix.detach()
 
@@ -683,7 +684,7 @@ if __name__ == "__main__":
 
     # cfg_7_re = TrainSet()
     # cfg_7_re.base_log_path = "log/train_7_retrain"
-    # cfg_7_re.ckpt = "log/train_7_retrain/ckpt/521550.pth"
+    # cfg_7_re.ckpt = "log/train_7_retrain/ckpt/1268740.pth"
     # cfg_7_re.batch_size = 28
     # cfg_7_re.d_lr = 0.0001
     # cfg_7_re.g_lr = 0.0001
@@ -723,7 +724,7 @@ if __name__ == "__main__":
 
     cfg_9 = TrainSet()
     cfg_9.base_log_path = "log/train_9"
-    cfg_9.ckpt = "log/train_9/ckpt/637374.pth"
+    cfg_9.ckpt = "log/train_9/ckpt/1509690.pth"
     cfg_9.batch_size = 20
     cfg_9.d_lr = 0.0001
     cfg_9.g_lr = 0.0001

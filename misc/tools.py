@@ -554,7 +554,7 @@ if __name__ == "__main__":
 
     from misc.utils import DataFolder
 
-    from .model import ArcFace
+    from .model import IDEncoder
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 6
@@ -584,12 +584,12 @@ if __name__ == "__main__":
     # dst_pts_pixel = ArcFace.get_dst_pts(512).to(device=device)
     # aligner.video_face_ext(vfp=vfp, dst_pts_pixel=dst_pts_pixel, out_size=(512,) * 2, batch_size=128, conf_thresh=0.95, min_box_size=512)
 
-    dst_pts_pixel = ArcFace.get_dst_pts(512).to(device=device)
+    dst_pts_pixel = IDEncoder.get_dst_pts(512).to(device=device)
     aligner.align_folder(
-        fp="/opt/share/deepfake/dataset_1/vggface2_hq512",
+        fp="org2",
         dst_pts_pixel=dst_pts_pixel,
-        sfp="/opt/share/deepfake/dataset_1/vggface2_hq512/realign_arcface_dst",
+        sfp="org2/realign_arcface_dst",
         batch_size=64,
         out_size=(512,) * 2,
-        min_box_size=384,
+        min_box_size=256,
     )

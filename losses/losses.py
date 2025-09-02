@@ -531,16 +531,37 @@ class HEARLoss(nn.Module):
         super().__init__()
         self.weight = weight
 
-    def forward(self, fake_img: torch.Tensor, target: torch.Tensor, same: torch.Tensor) -> torch.Tensor:
-        """
-        :param fake_img: 生成图像，形状 [B, C, H, W]
-        :param target: 目标图像，形状 [B, C, H, W]
-        :param same: 指示是否是“同一人”的标志，形状 [B]，值为0或1，相同为1
-        :return: 加权后的像素重建损失（仅对 same==1 的样本起作用）
-        """
-        same = same.float()
-        err_per_sample = torch.abs(fake_img - target).mean(dim=(1, 2, 3))
-        numerator = torch.dot(err_per_sample, same)
-        denominator = same.sum().clamp_min(1e-8)
-        loss = numerator / denominator
+    # def forward(self, fake_img: torch.Tensor, target: torch.Tensor, same: torch.Tensor) -> torch.Tensor:
+    #     """
+    #     :param fake_img: 生成图像，形状 [B, C, H, W]
+    #     :param target: 目标图像，形状 [B, C, H, W]
+    #     :param same: 指示是否是“同一人”的标志，形状 [B]，值为0或1，相同为1
+    #     :return: 加权后的像素重建损失（仅对 same==1 的样本起作用）
+    #     """
+    #     same = same.float()
+    #     err_per_sample = torch.abs(fake_img - target).mean(dim=(1, 2, 3))
+    #     numerator = torch.dot(err_per_sample, same)
+    #     denominator = same.sum().clamp_min(1e-8)
+    #     loss = numerator / denominator
+    #     return loss * self.weight
+
+    # + 新增参数 mask: [B,1,H,W] 或 [B,3,H,W]，值∈[0,1]
+    def forward(self, fake_img: torch.Tensor, target: torch.Tensor, same: torch.Tensor, mask: torch.Tensor | None = None, p: float | None = None) -> torch.Tensor:
+        same = same.float()  # [B]
+        if mask is None:
+            # 全图 L1
+            err_per_sample = torch.abs(fake_img - target).mean(dim=(1, 2, 3))
+        else:
+            # 面部掩模加权 L1（防稀释）
+            if mask.shape[1] == 1:
+                mask = mask.expand_as(fake_img)
+            num = (torch.abs(fake_img - target) * mask).sum(dim=(1, 2, 3))
+            den = mask.sum(dim=(1, 2, 3)).clamp_min(1e-8)
+            err_per_sample = num / den  # [B]
+
+        # 样本级权重：只让 same==1 的样本贡献，但按“批大小”归一化，稳定步长
+        B = fake_img.size(0)
+        # 若已知抽样概率 p，可做无偏缩放；未知可不传 p
+        scale = (1.0 / max(p, 1e-8)) if (p is not None) else 1.0
+        loss = (err_per_sample * same).sum() / B * scale
         return loss * self.weight

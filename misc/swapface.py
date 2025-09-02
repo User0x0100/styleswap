@@ -205,7 +205,7 @@ if __name__ == "__main__":
     # dataset = DataFolder("IDAssets")
     logger.info(f"{dataset=}")
 
-    ckpt = "log/train_7_retrain/ckpt/750000.pth"
+    ckpt = "log/train_7_retrain/ckpt/1260000.pth"
     logger.info(f"{ckpt=}")
 
     target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
@@ -216,9 +216,9 @@ if __name__ == "__main__":
     # target = "IDAssets/抖音-记录美好生活.mp4"
 
     source = dataset.sample(rando=True)
-    # source = "IDAssets/Emma_Watson.png"
+    source = "IDAssets/刘亦菲.png"
     logger.info(f"{source=}")
 
     swap = Swapper(ckpt).to(device=device)
-    swap.swap_folder("org2", sf_prefix="train_7_retrain")
-    # swap.swap_video(target, source)
+    # swap.swap_folder("IDAssets", source, sf_prefix="train_7_retrain")
+    swap.swap_video(target, source)

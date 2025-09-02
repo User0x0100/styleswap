@@ -8,8 +8,10 @@ from onnx import checker
 from onnx.checker import ValidationError
 
 from face_swap_model import FullGenerator
+from misc.model.idencoder.main import PROVIDER
+from train import TrainSet
 
-from .model import ArcFace
+from losses import IDLoss
 
 
 def export_onnx(model, input, onnx_file: str, opset_version: int = 20) -> None:
@@ -22,6 +24,7 @@ def export_onnx(model, input, onnx_file: str, opset_version: int = 20) -> None:
         input,
         onnx_file,
         opset_version=opset_version,
+        dynamo=True,
     )
 
     # 验证导出的模型
@@ -259,7 +262,7 @@ def export_arcface(
         num_tests: 精度测试次数
     """
     input = torch.randn(1, 3, 112, 112, dtype=torch.float32, device=device)
-    arcface = ArcFace.Model(fp16=False).to(device)
+    arcface = IDLoss(id_encode_provider=PROVIDER.BLENDFACE).to(device).arcface
 
     # 导出ONNX模型
     export_onnx(arcface, input, onnx_file)
@@ -284,7 +287,7 @@ def export_arcface(
 def export_face_model(
     size,
     onnx_file,
-    checkpoint,
+    ckpt,
     device: str = "cpu",
     compare_accuracy: bool = True,
     pytorch_device: str = None,
@@ -295,7 +298,6 @@ def export_face_model(
     导出面部模型到ONNX格式并可选择性地对比精度
 
     Args:
-        size: 模型尺寸
         onnx_file: ONNX文件保存路径
         checkpoint: 检查点文件路径
         device: 导出时使用的设备类型
@@ -304,12 +306,25 @@ def export_face_model(
         onnx_device: ONNX模型推理设备 (默认为'cpu')
         num_tests: 精度测试次数
     """
-    model = FullGenerator(size=size, isconcat=False).to(device)
-    checkpoint = torch.load(checkpoint, map_location=device, weights_only=True)
-    model.load_state_dict(checkpoint["g_ema"])
 
-    id = torch.randn(1, 512, dtype=torch.float32, device=device)
-    target = torch.randn(1, 3, 512, 512, dtype=torch.float32, device=device)
+    ckpt = torch.load(ckpt, map_location=device, weights_only=False)
+
+    if "train_info" in ckpt:
+        ckpt_info = TrainSet(**ckpt["train_info"])
+    else:
+        raise KeyError
+
+    size = ckpt_info.size
+    style_dim = ckpt_info.style_dim
+
+    if "g_ema" in ckpt:
+        model = FullGenerator(size=size, style_dim=style_dim, n_mlp=ckpt_info.n_mlp, isconcat=ckpt_info.isconcat).to(device)
+        model.load_state_dict(ckpt["g_ema"])
+    else:
+        raise KeyError
+
+    id = torch.randn(1, style_dim, dtype=torch.float32, device=device)
+    target = torch.randn(1, 3, size, size, dtype=torch.float32, device=device)
     test_input = (target, id)
 
     # 导出ONNX模型
@@ -335,18 +350,18 @@ def export_face_model(
 if __name__ == "__main__":
 
     size = 512
-    checkpoint = "log/train_6/ckpt/5000_512.pth"
-    face_onnx_file = "onnx_model/styleswap_512_ffhq.onnx"
-    arcface_onnx_file = "onnx_model/glint360k_r50_fp16.onnx"
+    checkpoint = "log/train_7_retrain/ckpt/950000.pth"
+    face_onnx_file = "onnx_model/512.onnx"
+    arcface_onnx_file = "onnx_model/swapid.onnx"
 
     # 导出ArcFace模型并对比精度
     # export_arcface(
     #     arcface_onnx_file,
     #     device="cuda",
     #     compare_accuracy=True,
-    #     pytorch_device="cuda",
-    #     onnx_device="cuda",
-    #     num_tests=200,
+    #     pytorch_device="cpu",
+    #     onnx_device="cpu",
+    #     num_tests=10,
     # )
 
     # 示例：在不同设备上进行对比

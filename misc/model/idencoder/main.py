@@ -20,7 +20,6 @@ def get_dst_pts(dst_size: int = 112):
         diff_x = 8.0 * ratio
     dst = ARCFACE_DST_PTS * ratio
     dst[:, 0] += diff_x
-
     return dst
 
 

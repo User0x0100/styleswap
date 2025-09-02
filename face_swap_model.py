@@ -747,21 +747,21 @@ if __name__ == "__main__":
     batch_size = 2
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    d = StyleGAN2Discriminator(size).to(device=device)
-    dataset = DataFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
+    # d = StyleGAN2Discriminator(size).to(device=device)
+    # dataset = DataFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
 
-    input = dataset.sample_tensor(rando=True)
+    # input = dataset.sample_tensor(rando=True)
 
-    input = input.to(device=device, dtype=torch.float).unsqueeze_(0).div_(255.0).mul_(2.0).sub_(1.0)
-    input = F.interpolate(input, size=size, mode="bicubic")
+    # input = input.to(device=device, dtype=torch.float).unsqueeze_(0).div_(255.0).mul_(2.0).sub_(1.0)
+    # input = F.interpolate(input, size=size, mode="bicubic")
 
-    feats = d.feature_maps(input)
+    # feats = d.feature_maps(input)
 
-    for idx, feat in enumerate(feats):
-        img = feat.mean(dim=1, keepdim=True)
-        utils.save_image(img, f"visi_feat_{idx}.png")
+    # for idx, feat in enumerate(feats):
+    #     img = feat.mean(dim=1, keepdim=True)
+    #     utils.save_image(img, f"visi_feat_{idx}.png")
 
-    # model = FullGenerator(size).to(device)
+    model = FullGenerator(size).to(device)
 
     # table = PrettyTable(["Layer", "Shape", "Param # (M)", "Trainable"])
     # total = 0
@@ -774,9 +774,9 @@ if __name__ == "__main__":
     # print(table)
     # print(f"Total params: {total / 1e6:.3f} M")
 
-    # source = torch.randn(batch_size, 3, size, size).to(device)
-    # id = torch.randn(batch_size, 512).to(device)
-    # model(source, id)
+    source = torch.randn(batch_size, 3, size, size).to(device)
+    id = torch.randn(batch_size, 512).to(device)
+    model(source, id)
 
     # from fvcore.nn import FlopCountAnalysis
 
