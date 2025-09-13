@@ -6,6 +6,9 @@ from torch.amp import custom_fwd
 from torch.autograd import Function
 from torch.utils.cpp_extension import load
 
+from ... import mode
+
+
 _MODULE_PATH = os.path.dirname(__file__)
 build_dir = os.path.join(_MODULE_PATH, "torch_ext_build")
 os.makedirs(build_dir, exist_ok=True)
@@ -120,7 +123,7 @@ class UpFirDn2d(Function):
 
 @custom_fwd(device_type="cuda", cast_inputs=torch.float)
 def upfirdn2d(input: torch.Tensor, kernel: torch.Tensor, up=1, down=1, pad=(0, 0)):
-    if input.device.type == "cpu":
+    if input.device.type == "cpu" or mode.EXPORT_MODE:
         return upfirdn2d_native(input, kernel, up, up, down, down, pad[0], pad[1], pad[0], pad[1])
     else:
         return UpFirDn2d.apply(input, kernel, (up, up), (down, down), (pad[0], pad[1], pad[0], pad[1]))

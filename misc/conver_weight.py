@@ -1,6 +1,6 @@
 import torch
 
-from face_swap_model import MultiScaleDiscriminator
+from model.impl import MultiScaleDiscriminator
 
 size = 512
 device = "cuda"

@@ -1,380 +1,316 @@
 import os
-
-import numpy as np
+from typing import Tuple, Optional, Union
 import onnx
-import onnxruntime as ort
 import torch
-from onnx import checker
-from onnx.checker import ValidationError
-
-from face_swap_model import FullGenerator
+import torch.nn as nn
+import numpy as np
 from misc.model.idencoder.main import PROVIDER
-from train import TrainSet
-
 from losses import IDLoss
+import onnxruntime as ort
+
+TensorOrTuple = Union[torch.Tensor, Tuple[torch.Tensor, ...]]
 
 
-def export_onnx(model, input, onnx_file: str, opset_version: int = 20) -> None:
+def print_onnx_summary(model, topk_initializers: int = 10, topk_ops: int = 20) -> None:
+    import math
+    from collections import Counter, defaultdict
 
-    os.makedirs(os.path.dirname(onnx_file), exist_ok=True)
-    model.eval()
+    g = model.graph
 
-    torch.onnx.export(
-        model,
-        input,
-        onnx_file,
-        opset_version=opset_version,
-        dynamo=True,
-    )
+    # === 基础信息 ===
+    ir_version = getattr(model, "ir_version", None)
+    opsets = {op.domain or "ai.onnx": op.version for op in model.opset_import}
+    print("\n=== ONNX SUMMARY ===")
+    print(f"IR version: {ir_version}")
+    print("Opset imports:", ", ".join([f"'{d}': {v}" for d, v in sorted(opsets.items())]))
 
-    # 验证导出的模型
-    try:
-        model = onnx.load(onnx_file)
-        checker.check_model(model, full_check=True)
-        print(f"✅ ONNX模型验证成功，已保存到: {onnx_file}")
+    # === dtype 映射与名称 ===
+    # 参考 onnx.TensorProto.DataType
+    _DT_NAME = {
+        0: "UNDEFINED",
+        1: "FLOAT32",  # 对应 TensorProto.FLOAT
+        2: "UINT8",
+        3: "INT8",
+        4: "UINT16",
+        5: "INT16",
+        6: "INT32",
+        7: "INT64",
+        8: "STRING",
+        9: "BOOL",
+        10: "FLOAT16",  # TensorProto.FLOAT16
+        11: "DOUBLE",  # TensorProto.DOUBLE (float64)
+        12: "UINT32",
+        13: "UINT64",
+        14: "COMPLEX64",
+        15: "COMPLEX128",
+        16: "BFLOAT16",
+        17: "FLOAT8E4M3FN",
+        18: "FLOAT8E4M3FNUZ",
+        19: "FLOAT8E5M2",
+        20: "FLOAT8E5M2FNUZ",
+    }
+    _DT_NBYTES = {  # 对 STRING/UNDEFINED/复数用近似或跳过
+        1: 4,
+        2: 1,
+        3: 1,
+        4: 2,
+        5: 2,
+        6: 4,
+        7: 8,
+        9: 1,
+        10: 2,
+        11: 8,
+        12: 4,
+        13: 8,
+        14: 8,
+        15: 16,
+        16: 2,
+        17: 1,
+        18: 1,
+        19: 1,
+        20: 1,
+    }
 
-        # 打印模型输入输出信息
-        print("\n模型信息:")
-        print("输入:")
-        for input in model.graph.input:
-            print(f"  - {input.name}: {[d.dim_value if d.dim_value else 'dynamic' for d in input.type.tensor_type.shape.dim]}")
-        print("输出:")
-        for output in model.graph.output:
-            print(f"  - {output.name}: {[d.dim_value if d.dim_value else 'dynamic' for d in output.type.tensor_type.shape.dim]}")
-    except ValidationError as e:
-        print("❌ ONNX模型验证失败：")
-        print(e)
-
-
-def compare_model_accuracy(pytorch_model, onnx_file, pytorch_device="cpu", onnx_device="cpu", num_tests=10):
-    """
-    对比PyTorch模型与ONNX模型的推理精度差距
-
-    Args:
-        pytorch_model: PyTorch模型
-        onnx_file: ONNX模型文件路径
-        pytorch_device: PyTorch模型运行设备
-        onnx_device: ONNX模型运行设备 ('cpu', 'cuda')
-        num_tests: 测试次数
-    """
-    print(f"\n🔍 开始对比模型精度差距...")
-    print(f"PyTorch设备: {pytorch_device}, ONNX设备: {onnx_device}")
-
-    # 创建ONNX Runtime会话
-    try:
-        # 配置ONNX Runtime提供者
-        providers = []
-        if onnx_device == "cuda":
-            providers.append("CUDAExecutionProvider")
-        providers.append("CPUExecutionProvider")
-
-        ort_session = ort.InferenceSession(onnx_file, providers=providers)
-        print(f"✅ ONNX Runtime会话创建成功，使用提供者: {ort_session.get_providers()}")
-    except Exception as e:
-        print(f"❌ 创建ONNX Runtime会话失败: {e}")
-        return
-
-    # 获取输入输出信息
-    input_specs = []
-    for inp in ort_session.get_inputs():
+    def _shape_dtype(v):
+        t = v.type.tensor_type
+        elem = t.elem_type
         shape = []
-        for dim in inp.shape:
-            if isinstance(dim, str) or dim is None:
-                shape.append(1)  # 动态维度设为1
+        for d in t.shape.dim:
+            if d.HasField("dim_value"):
+                shape.append(d.dim_value)
+            elif d.HasField("dim_param"):
+                shape.append(d.dim_param)  # 符号维
             else:
-                shape.append(dim)
-        input_specs.append({"name": inp.name, "shape": shape, "type": inp.type})
+                shape.append("?")
+        return shape, elem
 
-    output_specs = []
-    for outp in ort_session.get_outputs():
-        output_specs.append({"name": outp.name, "shape": outp.shape, "type": outp.type})
+    # === 输入输出 ===
+    init_names = {i.name for i in g.initializer} | {s.name for s in getattr(g, "sparse_initializer", [])}
 
-    print(f"模型输入: {len(input_specs)}个")
-    for i, spec in enumerate(input_specs):
-        print(f"  输入{i}: {spec['name']}, 形状: {spec['shape']}")
+    print("\nInputs:")
+    for v in g.input:
+        if v.name in init_names:
+            continue
+        shape, elem = _shape_dtype(v)
+        print(f"  - {v.name:30s} shape={shape} dtype={_DT_NAME.get(elem, elem)}")
 
-    print(f"模型输出: {len(output_specs)}个")
-    for i, spec in enumerate(output_specs):
-        print(f"  输出{i}: {spec['name']}, 形状: {spec['shape']}")
+    print("\nOutputs:")
+    for v in g.output:
+        shape, elem = _shape_dtype(v)
+        print(f"  - {v.name:30s} shape={shape} dtype={_DT_NAME.get(elem, elem)}")
 
-    # 存储每个输出的误差统计
-    outputs_stats = {}
-    for i, spec in enumerate(output_specs):
-        outputs_stats[spec["name"]] = {
-            "mae_errors": [],
-            "mse_errors": [],
-            "max_errors": [],
-            "cosine_similarities": [],
-        }
+    # === 节点统计 ===
+    op_hist = Counter(n.op_type for n in g.node)
+    total_nodes = sum(op_hist.values())
+    print(f"\nNodes: total={total_nodes}")
+    for op, cnt in op_hist.most_common(max(1, topk_ops)):
+        print(f"  - {op:20s} x {cnt}")
 
-    pytorch_model.eval()
+    # 按域统计
+    domain_hist = Counter((n.domain or "ai.onnx") for n in g.node)
+    print("Domains:")
+    for d, cnt in sorted(domain_hist.items(), key=lambda x: (-x[1], x[0])):
+        print(f"  - {d:20s} x {cnt}")
 
-    with torch.no_grad():
-        for test_idx in range(num_tests):
-            # 根据ONNX模型信息生成测试输入
-            test_inputs = []
-            onnx_inputs = {}
+    # === 初始器统计（dense + sparse）===
+    def _tensor_nbytes(dims, elem_type, raw_len):
+        if raw_len:  # external_data 无原地数据时 raw_len=0，需用 dims*elem_size 估算
+            return raw_len
+        n = 1
+        for d in dims:
+            n *= int(d) if isinstance(d, int) else 0
+        item = _DT_NBYTES.get(elem_type)
+        return n * item if item is not None else 0
 
-            for spec in input_specs:
-                # 生成随机输入数据
-                if "float" in spec["type"]:
-                    test_data = torch.randn(spec["shape"], dtype=torch.float32, device=pytorch_device)
-                elif "int" in spec["type"]:
-                    test_data = torch.randint(0, 100, spec["shape"], dtype=torch.int64, device=pytorch_device)
-                else:
-                    test_data = torch.randn(spec["shape"], dtype=torch.float32, device=pytorch_device)
+    total_bytes = 0
+    sizes = []
+    dtype_hist = Counter()
 
-                test_inputs.append(test_data)
-                onnx_inputs[spec["name"]] = test_data.cpu().numpy()
+    # dense initializers
+    for init in g.initializer:
+        sz = _tensor_nbytes(list(init.dims), init.data_type, len(init.raw_data))
+        total_bytes += sz
+        sizes.append((init.name, sz, list(init.dims), init.data_type))
+        dtype_hist.update([_DT_NAME.get(init.data_type, init.data_type)])
 
-            # PyTorch模型推理
-            if len(test_inputs) == 1:
-                pytorch_outputs = pytorch_model(test_inputs[0])
-            else:
-                pytorch_outputs = pytorch_model(*test_inputs)
+    # sparse initializers
+    # 只估算 values 部分
+    for sinit in getattr(g, "sparse_initializer", []):
+        vals = sinit.values
+        sz = _tensor_nbytes(list(vals.dims), vals.data_type, len(vals.raw_data))
+        total_bytes += sz
+        sizes.append((sinit.name, sz, list(vals.dims), vals.data_type))
+        dtype_hist.update([_DT_NAME.get(vals.data_type, vals.data_type)])
 
-            # 确保pytorch_outputs是列表或元组
-            if not isinstance(pytorch_outputs, (list, tuple)):
-                pytorch_outputs = [pytorch_outputs]
+    sizes.sort(key=lambda x: x[1], reverse=True)
+    mb = total_bytes / (1024**2)
+    print(f"\nInitializers: count={len(g.initializer)} dense, {len(getattr(g, 'sparse_initializer', []))} sparse, total ~{mb:.2f} MiB")
+    if dtype_hist:
+        print("Initializer dtype distribution:")
+        for k, v in dtype_hist.most_common():
+            print(f"  - {k:12s}: {v}")
 
-            # ONNX模型推理
-            onnx_outputs = ort_session.run(None, onnx_inputs)
+    print("Top tensors by size:")
+    for name, sz, dims, dt in sizes[: max(1, topk_initializers)]:
+        print(f"  - {name:30s} {sz/1024/1024:8.2f} MiB  shape={dims} dtype={_DT_NAME.get(dt, dt)}")
 
-            # 对比每个输出
-            for i, (pytorch_out, onnx_out) in enumerate(zip(pytorch_outputs, onnx_outputs)):
-                output_name = output_specs[i]["name"]
-
-                # 转换为numpy
-                if torch.is_tensor(pytorch_out):
-                    pytorch_out_np = pytorch_out.cpu().numpy()
-                else:
-                    pytorch_out_np = pytorch_out
-
-                # 确保形状匹配
-                if pytorch_out_np.shape != onnx_out.shape:
-                    print(f"⚠️  输出{i}形状不匹配: PyTorch {pytorch_out_np.shape} vs ONNX {onnx_out.shape}")
-                    continue
-
-                # 计算误差指标
-                mae = np.mean(np.abs(pytorch_out_np - onnx_out))
-                mse = np.mean((pytorch_out_np - onnx_out) ** 2)
-                max_error = np.max(np.abs(pytorch_out_np - onnx_out))
-
-                # 余弦相似度
-                pytorch_flat = pytorch_out_np.flatten()
-                onnx_flat = onnx_out.flatten()
-                if np.linalg.norm(pytorch_flat) > 0 and np.linalg.norm(onnx_flat) > 0:
-                    cosine_sim = np.dot(pytorch_flat, onnx_flat) / (np.linalg.norm(pytorch_flat) * np.linalg.norm(onnx_flat))
-                else:
-                    cosine_sim = 1.0 if np.allclose(pytorch_flat, onnx_flat) else 0.0
-
-                # 存储结果
-                outputs_stats[output_name]["mae_errors"].append(mae)
-                outputs_stats[output_name]["mse_errors"].append(mse)
-                outputs_stats[output_name]["max_errors"].append(max_error)
-                outputs_stats[output_name]["cosine_similarities"].append(cosine_sim)
-
-    # 打印每个输出的统计结果
-    print(f"\n📊 精度对比结果 (基于{num_tests}次测试):")
-
-    overall_quality_scores = []
-
-    for output_name, stats in outputs_stats.items():
-        print(f"\n🎯 输出 '{output_name}':")
-        print(f"  平均绝对误差 (MAE):")
-        print(f"    - 平均值: {np.mean(stats['mae_errors']):.8f}")
-        print(f"    - 最大值: {np.max(stats['mae_errors']):.8f}")
-        print(f"    - 最小值: {np.min(stats['mae_errors']):.8f}")
-
-        print(f"  均方误差 (MSE):")
-        print(f"    - 平均值: {np.mean(stats['mse_errors']):.8f}")
-        print(f"    - 最大值: {np.max(stats['mse_errors']):.8f}")
-        print(f"    - 最小值: {np.min(stats['mse_errors']):.8f}")
-
-        print(f"  最大误差:")
-        print(f"    - 平均值: {np.mean(stats['max_errors']):.8f}")
-        print(f"    - 最大值: {np.max(stats['max_errors']):.8f}")
-        print(f"    - 最小值: {np.min(stats['max_errors']):.8f}")
-
-        print(f"  余弦相似度:")
-        print(f"    - 平均值: {np.mean(stats['cosine_similarities']):.8f}")
-        print(f"    - 最大值: {np.max(stats['cosine_similarities']):.8f}")
-        print(f"    - 最小值: {np.min(stats['cosine_similarities']):.8f}")
-
-        # 单个输出的质量评估
-        avg_mae = np.mean(stats["mae_errors"])
-        avg_cosine_sim = np.mean(stats["cosine_similarities"])
-
-        if avg_mae < 1e-5 and avg_cosine_sim > 0.9999:
-            quality = "优秀"
-            score = 4
-            print(f"  🎉 '{output_name}' 转换精度: {quality}")
-        elif avg_mae < 1e-4 and avg_cosine_sim > 0.999:
-            quality = "良好"
-            score = 3
-            print(f"  ✅ '{output_name}' 转换精度: {quality}")
-        elif avg_mae < 1e-3 and avg_cosine_sim > 0.99:
-            quality = "可接受"
-            score = 2
-            print(f"  ⚠️  '{output_name}' 转换精度: {quality}")
-        else:
-            quality = "需要检查"
-            score = 1
-            print(f"  ❌ '{output_name}' 转换精度: {quality}")
-
-        overall_quality_scores.append(score)
-
-    # 整体质量评估
-    if overall_quality_scores:
-        avg_score = np.mean(overall_quality_scores)
-        min_score = min(overall_quality_scores)
-
-        print(f"\n🏆 整体模型转换质量:")
-        if min_score >= 4:
-            print("🎉 优秀 - 所有输出精度都很高")
-        elif min_score >= 3:
-            print("✅ 良好 - 所有输出精度可接受")
-        elif min_score >= 2:
-            print("⚠️  可接受 - 部分输出精度需关注")
-        else:
-            print("❌ 需要检查 - 存在精度问题")
-
-        print(f"平均质量分数: {avg_score:.2f}/4.0")
+    # === external data ===
+    uses_external = any(getattr(i, "external_data", None) for i in g.initializer) or any(getattr(s.values, "external_data", None) for s in getattr(g, "sparse_initializer", []))
+    print(f"\nExternal data: {bool(uses_external)}")
 
 
-def export_arcface(
-    onnx_file,
-    device: str = "cpu",
-    compare_accuracy: bool = True,
-    pytorch_device: str = None,
-    onnx_device: str = None,
-    num_tests: int = 10,
-):
-    """
-    导出ArcFace模型到ONNX格式并可选择性地对比精度
+def _ensure_dir(p: str) -> None:
+    d = os.path.dirname(p)
+    if d:
+        os.makedirs(d, exist_ok=True)
 
-    Args:
-        onnx_file: ONNX文件保存路径
-        device: 导出时使用的设备类型
-        compare_accuracy: 是否对比精度
-        pytorch_device: PyTorch模型推理设备 (默认与device相同)
-        onnx_device: ONNX模型推理设备 (默认为'cpu')
-        num_tests: 精度测试次数
-    """
-    input = torch.randn(1, 3, 112, 112, dtype=torch.float32, device=device)
-    arcface = IDLoss(id_encode_provider=PROVIDER.BLENDFACE).to(device).arcface
 
-    # 导出ONNX模型
-    export_onnx(arcface, input, onnx_file)
+class ONNXExporter:
+    def __init__(self, device: Union[str, torch.device] = torch.device("cuda", 0)):
+        self.device = torch.device(device) if not isinstance(device, torch.device) else device
 
-    # 对比精度
-    if compare_accuracy:
-        pytorch_device = pytorch_device or device
-        onnx_device = onnx_device or "cpu"
+    def export_model(
+        self,
+        model_module: nn.Module,
+        sample_input: TensorOrTuple,
+        onnx_path: str,
+        opset_version: int | None = None,
+    ) -> bool:
+        _ensure_dir(onnx_path)
+        model_module.eval()
 
-        # 将模型移动到推理设备
-        arcface_for_test = arcface.to(pytorch_device)
-
-        compare_model_accuracy(
-            arcface_for_test,
-            onnx_file,
-            pytorch_device=pytorch_device,
-            onnx_device=onnx_device,
-            num_tests=num_tests,
+        torch.onnx.export(
+            model_module,
+            sample_input,
+            onnx_path,
+            opset_version=opset_version,
+            export_params=True,
+            dynamo=True,
+            fallback=True,
+            optimize=True,
+            verify=True,
+            external_data=False,
+            keep_initializers_as_inputs=False,
+            verbose=True,
         )
 
+        onnx_model = onnx.load(onnx_path)
+        onnx.checker.check_model(onnx_model, full_check=True)
+        print(f"✅ 模型成功导出到: {onnx_path}")
+        print_onnx_summary(onnx_model)
+        return True
 
-def export_face_model(
-    size,
-    onnx_file,
-    ckpt,
-    device: str = "cpu",
-    compare_accuracy: bool = True,
-    pytorch_device: str = None,
-    onnx_device: str = None,
-    num_tests: int = 10,
-):
-    """
-    导出面部模型到ONNX格式并可选择性地对比精度
+    @staticmethod
+    def _basic_metrics(ref: np.ndarray, pred: np.ndarray, value_range: Optional[Tuple[float, float]] = None):
+        a = ref.astype(np.float64, copy=False).ravel()
+        b = pred.astype(np.float64, copy=False).ravel()
+        d = b - a
+        absd = np.abs(d)
+        mae = float(absd.mean())
+        mse = float((d * d).mean())
+        max_abs = float(absd.max(initial=0.0))
+        # 余弦相似度
+        dot = float(np.dot(a, b))
+        na = float(np.linalg.norm(a))
+        nb = float(np.linalg.norm(b))
+        cos = dot / max(na * nb, 1e-12)
+        # 可选 PSNR
+        if value_range is not None:
+            peak = max(float(value_range[1] - value_range[0]), 1e-12)
+            psnr = 20.0 * np.log10(peak) - 10.0 * np.log10(max(mse, 1e-12))
+        else:
+            psnr = None
+        return mae, mse, max_abs, cos, psnr
 
-    Args:
-        onnx_file: ONNX文件保存路径
-        checkpoint: 检查点文件路径
-        device: 导出时使用的设备类型
-        compare_accuracy: 是否对比精度
-        pytorch_device: PyTorch模型推理设备 (默认与device相同)
-        onnx_device: ONNX模型推理设备 (默认为'cpu')
-        num_tests: 精度测试次数
-    """
+    def compare_precision(
+        self,
+        model_module: nn.Module,
+        sample_input: TensorOrTuple,
+        onnx_path: str,
+        value_range: Optional[Tuple[float, float]] = None,  # 例如(-1,1)或(0,1)
+    ) -> None:
+        model_module.eval()
+        with torch.inference_mode():
+            tout = model_module(*sample_input) if isinstance(sample_input, tuple) else model_module(sample_input)
+            if not isinstance(tout, tuple):
+                tout = (tout,)
+            torch_outputs = [t.detach().cpu().numpy() for t in tout]
 
-    ckpt = torch.load(ckpt, map_location=device, weights_only=False)
-
-    if "train_info" in ckpt:
-        ckpt_info = TrainSet(**ckpt["train_info"])
-    else:
-        raise KeyError
-
-    size = ckpt_info.size
-    style_dim = ckpt_info.style_dim
-
-    if "g_ema" in ckpt:
-        model = FullGenerator(size=size, style_dim=style_dim, n_mlp=ckpt_info.n_mlp, isconcat=ckpt_info.isconcat).to(device)
-        model.load_state_dict(ckpt["g_ema"])
-    else:
-        raise KeyError
-
-    id = torch.randn(1, style_dim, dtype=torch.float32, device=device)
-    target = torch.randn(1, 3, size, size, dtype=torch.float32, device=device)
-    test_input = (target, id)
-
-    # 导出ONNX模型
-    export_onnx(model, test_input, onnx_file)
-
-    # 对比精度
-    if compare_accuracy:
-        pytorch_device = pytorch_device or device
-        onnx_device = onnx_device or "cpu"
-
-        # 将模型移动到推理设备
-        model_for_test = model.to(pytorch_device)
-
-        compare_model_accuracy(
-            model_for_test,
-            onnx_file,
-            pytorch_device=pytorch_device,
-            onnx_device=onnx_device,
-            num_tests=num_tests,
+        so = ort.SessionOptions()
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        so.intra_op_num_threads = 4
+        so.inter_op_num_threads = 4
+        # so.log_severity_level = 1
+        sess = ort.InferenceSession(
+            onnx_path,
+            providers=["CUDAExecutionProvider"],
+            provider_options=[{"device_id": self.device.index}],
+            sess_options=so,
         )
+        feed = {sess.get_inputs()[i].name: x.cpu().numpy() for i, x in enumerate(sample_input if isinstance(sample_input, tuple) else (sample_input,))}
+        onnx_outputs = sess.run(None, feed)
+        if not isinstance(onnx_outputs, tuple):
+            onnx_outputs = (*onnx_outputs,)
+
+        print(f"\nPrecision Summary: {onnx_path}")
+        for i, (a, b) in enumerate(zip(torch_outputs, onnx_outputs), 1):
+            if a.shape != b.shape:
+                print(f"Out{i}: shape mismatch {a.shape} vs {b.shape}")
+            mae, mse, mx, cos, psnr = self._basic_metrics(a, b, value_range)
+            if psnr is None:
+                print(f"Out{i}: MAE={mae:.6g}  MSE={mse:.6g}  Max={mx:.6g}  Cos={cos:.6f}")
+            else:
+                print(f"Out{i}: MAE={mae:.6g}  MSE={mse:.6g}  Max={mx:.6g}  Cos={cos:.6f}  PSNR={psnr:.2f}dB")
+
+    def export_swap(self, ckpt: str, sp: str, opset_version: int | None = None):
+        import model
+        from model import FullGenerator
+        from train import TrainSet
+        import torch.nn.functional as F
+
+        model.mode.EXPORT_MODE = True
+
+        ckpt_obj = torch.load(ckpt, map_location="cpu", weights_only=False)
+        if "train_info" not in ckpt_obj or "g_ema" not in ckpt_obj:
+            raise KeyError("检查点文件格式错误")
+
+        train_info = TrainSet(**ckpt_obj["train_info"])
+        m = FullGenerator(
+            size=train_info.size,
+            style_dim=train_info.style_dim,
+            n_mlp=train_info.n_mlp,
+            isconcat=train_info.isconcat,
+        ).to(self.device)
+        m.load_state_dict(ckpt_obj["g_ema"], strict=True)
+        m.eval()
+
+        target = torch.randn(1, 3, train_info.size, train_info.size, device=self.device)
+        id_tensor = torch.randn(1, train_info.style_dim, device=self.device)
+        sample_inputs: Tuple[torch.Tensor, torch.Tensor] = (target, id_tensor)
+
+        self.export_model(m, sample_inputs, sp, opset_version=opset_version)
+        self.compare_precision(m, sample_inputs, sp)
+
+        return train_info.id_encode_provider
+
+    def export_idencode(self, sp: str, id_encode_provider: PROVIDER = PROVIDER.BLENDFACE, opset_version: int | None = None):
+        import torch.nn.functional as F
+
+        idloss = IDLoss(id_encode_provider=id_encode_provider).to(self.device)
+        backbone = idloss.arcface.eval()
+
+        inp = torch.randn(1, 3, 112, 112, device=self.device)
+
+        self.export_model(backbone, inp, sp, opset_version=opset_version)
+        self.compare_precision(backbone, inp, sp, value_range=(-1.0, 1.0))
 
 
 if __name__ == "__main__":
+    exp = ONNXExporter(device=torch.device("cuda:0"))
 
-    size = 512
-    checkpoint = "log/train_7_retrain/ckpt/950000.pth"
-    face_onnx_file = "onnx_model/512.onnx"
-    arcface_onnx_file = "onnx_model/swapid.onnx"
+    swap_ckpt = "log/train_12/ckpt/15000.pth"
+    swap_onnx_sp = "onnx_model/512.onnx"
+    idencode_onnx_sp = "onnx_model/id_encode.onnx"
 
-    # 导出ArcFace模型并对比精度
-    # export_arcface(
-    #     arcface_onnx_file,
-    #     device="cuda",
-    #     compare_accuracy=True,
-    #     pytorch_device="cpu",
-    #     onnx_device="cpu",
-    #     num_tests=10,
-    # )
-
-    # 示例：在不同设备上进行对比
-    # export_arcface(arcface_onnx_file, device="cuda", compare_accuracy=True,
-    #               pytorch_device="cuda", onnx_device="cuda")
-
-    export_face_model(
-        size,
-        face_onnx_file,
-        checkpoint,
-        device="cpu",
-        compare_accuracy=True,
-        pytorch_device="cuda",
-        onnx_device="cuda",
-        num_tests=5,
-    )
+    id_encode_provider = exp.export_swap(swap_ckpt, swap_onnx_sp)
+    exp.export_idencode(idencode_onnx_sp, id_encode_provider=id_encode_provider)

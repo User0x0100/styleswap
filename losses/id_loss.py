@@ -8,7 +8,7 @@ from misc.tools import compute_similarity_transform, pixel_to_normalized
 
 
 class IDLoss(nn.Module):
-    def __init__(self, weight: float = 1.0, id_encode_provider: PROVIDER = PROVIDER.ARC_OFFICIAL):
+    def __init__(self, weight: float = 1.0, id_encode_provider: PROVIDER = PROVIDER.ARC_OFFICIAL_R50):
         super().__init__()
         self.weight = weight
 
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     dataset = DataFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
 
     id_loss_sim = IDLoss(id_encode_provider=PROVIDER.ARC_SIMSWAP).to(device=device)
-    id_loss_off = IDLoss(id_encode_provider=PROVIDER.ARC_OFFICIAL).to(device=device)
+    id_loss_off = IDLoss(id_encode_provider=PROVIDER.ARC_OFFICIAL_R50).to(device=device)
     id_loss_bf = IDLoss(id_encode_provider=PROVIDER.BLENDFACE).to(device=device)
 
     facepars = FaceParsing.Model(compile_model=False).to(device=device)

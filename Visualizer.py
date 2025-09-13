@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, RandomSampler
 from torchvision import utils
 
 from dataloader.data_loader import FaceDataset
-from face_swap_model import FullGenerator
+from model.impl import FullGenerator
 from losses import (GANLoss, L1Loss, PerceptualLoss, g_path_regularize,
                     r1_penalty)
 from losses.arcface import ArcFace

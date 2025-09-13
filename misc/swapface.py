@@ -10,7 +10,7 @@ from torchcodec.decoders import VideoDecoder
 from torchvision.io import decode_image
 from tqdm import tqdm
 
-from face_swap_model import FullGenerator
+from model import FullGenerator
 from losses.id_loss import IDLoss
 from misc.model import FaceParsing
 
@@ -205,7 +205,7 @@ if __name__ == "__main__":
     # dataset = DataFolder("IDAssets")
     logger.info(f"{dataset=}")
 
-    ckpt = "log/train_7_retrain/ckpt/1260000.pth"
+    ckpt = "log/train_7_f32/ckpt/1325000.pth"
     logger.info(f"{ckpt=}")
 
     target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
@@ -213,12 +213,11 @@ if __name__ == "__main__":
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-06-20(邓叮玲 许馨文)/20230620-155807793邓叮玲(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2023-08-28(李小姐 邱小姐)/20230828-122302李小姐(电脑录屏).mp4"
     # target = "/opt/share/deepfake/linshi/录屏素材/2025-07-03(蒋女士 林嘉惠 王钰 符媛媛 石星儿)/王钰(电脑录屏).mp4"
-    # target = "IDAssets/抖音-记录美好生活.mp4"
 
     source = dataset.sample(rando=True)
-    source = "IDAssets/刘亦菲.png"
+    source = "IDAssets/Henry_Cavill.webp"
     logger.info(f"{source=}")
 
     swap = Swapper(ckpt).to(device=device)
-    # swap.swap_folder("IDAssets", source, sf_prefix="train_7_retrain")
+    # swap.swap_folder("IDAssets", source, sf_prefix="train_11_")  # /opt/share/deepfake/linshi/stylegan2_test_ret
     swap.swap_video(target, source)

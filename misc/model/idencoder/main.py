@@ -27,9 +27,10 @@ from enum import Enum
 
 
 class PROVIDER(Enum):
-    ARC_OFFICIAL = 1
-    ARC_SIMSWAP = 2
-    BLENDFACE = 3
+    ARC_OFFICIAL_R50 = 1
+    ARC_OFFICIAL_R100 = 2
+    ARC_SIMSWAP = 3
+    BLENDFACE = 4
 
 
 class Model(nn.Module):
@@ -37,11 +38,16 @@ class Model(nn.Module):
         super().__init__()
 
         match provider:
-            case PROVIDER.ARC_OFFICIAL:
+            case PROVIDER.ARC_OFFICIAL_R50:
 
                 weight = Path(__file__).with_name("glint360k_r50_fp16.pth")
                 # glint360k_r50_fp16.pth from https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch
                 self.backend = iresnet50()
+
+            case PROVIDER.ARC_OFFICIAL_R100:
+                weight = Path(__file__).with_name("glint360k_cosface_r100_fp16_0.1.pth")
+                self.backend = iresnet100()
+
             case PROVIDER.ARC_SIMSWAP:
 
                 weight = Path(__file__).with_name("simswap.pth")
@@ -68,14 +74,31 @@ class Model(nn.Module):
 
 if __name__ == "__main__":
     import time
+    from torch.amp import autocast
 
     device = "cuda"
 
-    arcface = Model(provider=PROVIDER.BLENDFACE).to(device)
+    arcface = Model(provider=PROVIDER.ARC_OFFICIAL_R100).to(device)
 
     input = torch.randn(24, 3, 512, 512, dtype=torch.float32, device=device)
-    for i in range(10):
+
+    # Warmup
+    for i in range(5):
         arcface(input)
+
+    # FP32 inference
+    with torch.no_grad():
+        out_fp32 = arcface(input)
+
+    # FP16 inference
+    with torch.no_grad(), autocast(device_type=device):
+        out_fp16 = arcface(input)
+
+    # Compare precision
+    diff = (out_fp32 - out_fp16.float()).abs().mean().item()
+    max_diff = (out_fp32 - out_fp16.float()).abs().max().item()
+    print(f"FP32 vs FP16 平均绝对误差: {diff:.9f}")
+    print(f"FP32 vs FP16 最大绝对误差: {max_diff:.9f}")
 
     print("执行性能测试...")
     times = []

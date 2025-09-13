@@ -16,7 +16,7 @@ from torchcodec.decoders import VideoDecoder
 from torchvision.io import ImageReadMode, decode_image
 from tqdm import tqdm
 
-from face_swap_model import FullGenerator
+from model.impl import FullGenerator
 from misc.model import FaceParsing
 
 from .model import ArcFace

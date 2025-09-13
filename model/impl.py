@@ -1,13 +1,12 @@
 import math
 import random
 from typing import List
-
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
-
-from misc.ops.fused_act import FusedLeakyReLU, fused_leaky_relu
-from misc.ops.upfirdn2d import upfirdn2d
+from . import mode
+from .ops.fused_act import FusedLeakyReLU, fused_leaky_relu
+from .ops.upfirdn2d import upfirdn2d
 
 
 class PixelNorm(nn.Module):
@@ -107,12 +106,9 @@ class EqualConv2d(nn.Module):
             self.bias = None
 
     def forward(self, input: Tensor):
-        out = F.conv2d(input, self.weight * self.scale, bias=self.bias, stride=self.stride, padding=self.padding)
+        out = torch.conv2d(input, self.weight * self.scale, bias=self.bias, stride=self.stride, padding=self.padding)
 
         return out
-
-    def __repr__(self):
-        return f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]}," f" {self.weight.shape[2]}, stride={self.stride}, padding={self.padding})"
 
 
 class EqualLinear(nn.Module):
@@ -122,7 +118,7 @@ class EqualLinear(nn.Module):
         out_dim,
         bias=True,
         bias_init=0,
-        lr_mul=1,
+        lr_mul=1.0,
         activation=None,
     ):
         super().__init__()
@@ -143,9 +139,11 @@ class EqualLinear(nn.Module):
         if self.activation:
             out = F.linear(input, self.weight * self.scale)
             out = fused_leaky_relu(out, self.bias * self.lr_mul)
-
         else:
-            out = F.linear(input, self.weight * self.scale, bias=self.bias * self.lr_mul)
+            if self.bias is not None:
+                out = F.linear(input, self.weight * self.scale, bias=self.bias * self.lr_mul)
+            else:
+                out = F.linear(input, self.weight * self.scale, bias=None)
 
         return out
 
@@ -169,7 +167,6 @@ class ModulatedConv2d(nn.Module):
     def __init__(self, in_channel, out_channel, kernel_size, style_dim, demodulate=True, upsample=False, downsample=False, blur_kernel=[1, 3, 3, 1]):
         super().__init__()
 
-        self.eps = 1e-8
         self.kernel_size = kernel_size
         self.in_channel = in_channel
         self.out_channel = out_channel
@@ -221,7 +218,7 @@ class ModulatedConv2d(nn.Module):
             input = input.view(1, batch * in_channel, height, width)
             weight = weight.view(batch, self.out_channel, in_channel, self.kernel_size, self.kernel_size)
             weight = weight.transpose(1, 2).reshape(batch * in_channel, self.out_channel, self.kernel_size, self.kernel_size)
-            out = F.conv_transpose2d(input, weight, padding=0, stride=2, groups=batch)
+            out = torch.conv_transpose2d(input, weight, padding=0, stride=2, groups=batch)
             height, width = out.shape[-2:]
             out = out.view(batch, self.out_channel, height, width)
             out = self.blur(out)
@@ -230,13 +227,13 @@ class ModulatedConv2d(nn.Module):
             input = self.blur(input)
             height, width = input.shape[-2:]
             input = input.view(1, batch * in_channel, height, width)
-            out = F.conv2d(input, weight, padding=0, stride=2, groups=batch)
+            out = torch.conv2d(input, weight, padding=0, stride=2, groups=batch)
             height, width = out.shape[-2:]
             out = out.view(batch, self.out_channel, height, width)
 
         else:
             input = input.view(1, batch * in_channel, height, width)
-            out = F.conv2d(input, weight, padding=self.padding, groups=batch)
+            out = torch.conv2d(input, weight, padding=self.padding, groups=batch)
             height, width = out.shape[-2:]
             out = out.view(batch, self.out_channel, height, width)
 
@@ -341,7 +338,7 @@ class ToMask(nn.Module):
             skip = self.upsample(skip)
 
             out = out + skip
-        out = F.sigmoid(out)
+        out = torch.sigmoid(out)
         return out
 
 
@@ -381,7 +378,6 @@ class Generator(nn.Module):
         self.log_size = int(math.log(size, 2))
 
         self.convs = nn.ModuleList()
-        self.upsamples = nn.ModuleList()
         self.to_rgbs = nn.ModuleList()
         self.to_masks = nn.ModuleList()
 
@@ -401,15 +397,23 @@ class Generator(nn.Module):
 
         self.n_latent = self.log_size * 2 - 2
 
-    def make_noise(self):
-        device = self.input.input.device
-
-        noises = [torch.randn(1, 1, 2**2, 2**2, device=device)]
-
+    def make_noise(self, batch: int, device: torch.device):
+        """
+        为当前网络拓扑生成与每个 StyledConv 一一对应的噪声张量，形状对齐 batch。
+        返回顺序：
+        idx 0 -> 4x4 第一层 conv 噪声
+        之后每个分辨率两层：res(i) 的 conv1、conv2
+        """
+        noises: List[Tensor] = []
+        # 4x4
+        ch = self.channels[4]
+        noises.append(torch.randn(batch, ch, 4, 4, device=device))
+        # 后续分辨率
         for i in range(3, self.log_size + 1):
-            for _ in range(2):
-                noises.append(torch.randn(1, 1, 2**i, 2**i, device=device))
-
+            res = 2**i
+            ch = self.channels[res]
+            noises.append(torch.randn(batch, ch, res, res, device=device))  # conv1
+            noises.append(torch.randn(batch, ch, res, res, device=device))  # conv2
         return noises
 
     def mean_latent(self, n_latent):
@@ -444,16 +448,18 @@ class Generator(nn.Module):
             styles = [self.style(s) for s in styles]
 
         if noise is None:
-            """
-            noise = [None] * (2 * (self.log_size - 2) + 1)
-            """
-            noise = []
             batch = styles[0].shape[0]
-            for i in range(self.n_mlp + 1):
-                size = 2 ** (i + 2)
-                noise.append(torch.randn(batch, self.channels[size], size, size))
+            device = self.input.input.device
+            noise = self.make_noise(batch, device)
+        else:
+            # 断言形状以避免隐性错误
+            batch = styles[0].shape[0]
+            assert isinstance(noise, list) and len(noise) == (1 + 2 * (self.log_size - 2)), f"noise length mismatch: got {len(noise)}"
+            for n in noise:
+                assert n.shape[0] == batch, "noise batch size must match styles batch size"
 
         if truncation < 1:
+            assert truncation_latent is not None, "truncation_latent required when truncation < 1"
             style_t = []
 
             for style in styles:
@@ -482,25 +488,22 @@ class Generator(nn.Module):
         skip = self.to_rgb1(out, latent[:, 1])
         mask = self.to_mask1(out, latent[:, 1])
         masks.append(mask)
+
         i = 1
-        for conv1, conv2, noise1, noise2, to_rgb, to_mask in zip(
-            self.convs[::2],
-            self.convs[1::2],
-            noise[1::2],
-            noise[2::2],
-            self.to_rgbs,
-            self.to_masks,
-        ):
+        k = 1  # 从 noise[1] 开始
+        for conv1, conv2, to_rgb, to_mask in zip(self.convs[::2], self.convs[1::2], self.to_rgbs, self.to_masks):
+            n1, n2 = noise[k], noise[k + 1]
             if i > noise_blank_level:
-                blankmask = F.interpolate(masks[-1], noise1.shape[-2:])
-                noise1 = self.conver_noise_withmask(noise1, blankmask)
-                noise2 = self.conver_noise_withmask(noise2, blankmask)
-            out = conv1(out, latent[:, i], noise=noise1)
-            out = conv2(out, latent[:, i + 1], noise=noise2)
+                blankmask = F.interpolate(masks[-1], n1.shape[-2:], mode="bilinear")
+                n1 = self.conver_noise_withmask(n1, blankmask)
+                n2 = self.conver_noise_withmask(n2, blankmask)
+            out = conv1(out, latent[:, i], noise=n1)
+            out = conv2(out, latent[:, i + 1], noise=n2)
             skip = to_rgb(out, latent[:, i + 2], skip)
             mask = to_mask(out, latent[:, i + 2], mask)
             masks.append(mask)
             i += 2
+            k += 2
 
         image = skip
         if return_latents:
@@ -606,6 +609,9 @@ class FullGenerator(nn.Module):
             [outs], return_latents, inject_index, truncation, truncation_latent, input_is_latent, noise=noise[1:], noise_blank_level=noise_blank_level
         )
 
+        if mode.EXPORT_MODE:
+            return out_img, mask
+
         return out_img, latent, mask
 
 
@@ -651,8 +657,8 @@ class StyleGAN2Discriminator(nn.Module):
 
         self.final_conv = ConvLayer(in_channels + 1, channels[4], 3, bias=True, activate=True)
         self.final_linear = nn.Sequential(
-            EqualLinear(channels[4] * 4 * 4, channels[4], bias=True, bias_init=0, lr_mul=1, activation="fused_lrelu"),
-            EqualLinear(channels[4], 1, bias=True, bias_init=0, lr_mul=1, activation=None),
+            EqualLinear(channels[4] * 4 * 4, channels[4], bias=True, bias_init=0, lr_mul=1.0, activation="fused_lrelu"),
+            EqualLinear(channels[4], 1, bias=True, bias_init=0, lr_mul=1.0, activation=None),
         )
         self.stddev_group = stddev_group
         self.stddev_feat = 1
@@ -676,13 +682,17 @@ class StyleGAN2Discriminator(nn.Module):
         out = x
 
         b, c, h, w = out.shape
-        # concatenate a group stddev statistics to out
-        group = min(b, self.stddev_group)  # Minibatch must be divisible by (or smaller than) group_size
-        stddev = out.view(group, -1, self.stddev_feat, c // self.stddev_feat, h, w)
-        stddev = torch.sqrt(stddev.var(0, unbiased=False) + 1e-8)
-        stddev = stddev.mean([2, 3, 4], keepdims=True).squeeze(2)
-        stddev = stddev.repeat(group, 1, h, w)
-        out = torch.cat([out, stddev], 1)
+        group = min(b, self.stddev_group)
+        n = b // group
+        if b % group != 0:
+            group = b
+            n = 1
+        y = out.view(group, n, self.stddev_feat, c // self.stddev_feat, h, w)
+        y = torch.sqrt(y.var(dim=0, unbiased=False) + 1e-8)  # [n, f, c//f, h, w]
+        y = y.mean(dim=[2, 3, 4])  # [n, f]
+        y = y.repeat_interleave(group, dim=0).view(b, self.stddev_feat, 1, 1)  # [b, f, 1, 1]
+        y = y.expand(b, self.stddev_feat, h, w)  # [b, f, h, w]
+        out = torch.cat([out, y], dim=1)
 
         out = self.final_conv(out)
         out = out.view(b, -1)
@@ -744,7 +754,7 @@ if __name__ == "__main__":
     from misc.utils import DataFolder
 
     size = 512
-    batch_size = 2
+    batch_size = 1
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # d = StyleGAN2Discriminator(size).to(device=device)
@@ -761,24 +771,24 @@ if __name__ == "__main__":
     #     img = feat.mean(dim=1, keepdim=True)
     #     utils.save_image(img, f"visi_feat_{idx}.png")
 
-    model = FullGenerator(size).to(device)
+    model = FullGenerator(size, isconcat=False).to(device)
 
-    # table = PrettyTable(["Layer", "Shape", "Param # (M)", "Trainable"])
-    # total = 0
+    table = PrettyTable(["Layer", "Shape", "Param # (M)", "Trainable"])
+    total = 0
 
-    # for name, p in model.named_parameters():
-    #     num = p.numel()
-    #     table.add_row([name, list(p.shape), f"{num / 1e6:.6f}", p.requires_grad])
-    #     total += num
+    for name, p in model.named_parameters():
+        num = p.numel()
+        table.add_row([name, list(p.shape), f"{num / 1e6:.6f}", p.requires_grad])
+        total += num
 
-    # print(table)
-    # print(f"Total params: {total / 1e6:.3f} M")
+    print(table)
+    print(f"Total params: {total / 1e6:.3f} M")
 
     source = torch.randn(batch_size, 3, size, size).to(device)
     id = torch.randn(batch_size, 512).to(device)
     model(source, id)
 
-    # from fvcore.nn import FlopCountAnalysis
+    from fvcore.nn import FlopCountAnalysis
 
-    # flops = FlopCountAnalysis(model, (source, id))
-    # print(f"Total FLOPs: {flops.total() / 1e9:.3f} GFLOPs")
+    flops = FlopCountAnalysis(model, (source, id))
+    print(f"Total FLOPs: {flops.total() / 1e9:.3f} GFLOPs")

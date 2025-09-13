@@ -18,7 +18,7 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from dataloader import datasetloader
-from face_swap_model import FullGenerator, StyleGAN2Discriminator
+from model import FullGenerator, StyleGAN2Discriminator
 from losses import GANLoss, HEARLoss, IDLoss, PerceptualLoss, WFMLoss, g_path_regularize, r1_penalty
 from misc.model import FaceParsing, IDEncoder
 from misc.tools import tensor2cv_8uc3_bgr
@@ -38,6 +38,8 @@ class TrainSet:
 
     device: torch.device = torch.device(DEVICE_TYPE, 0)
     is_distributed: bool = False
+
+    enable_amp: bool = False
 
     base_log_path: str = "log/train"
     ckpt_dir: str = "ckpt"
@@ -69,7 +71,7 @@ class TrainSet:
     gan_type: str = "wgan_softplus"
     gan_loss_weight: float = 1.0
 
-    id_encode_provider: IDEncoder.PROVIDER = IDEncoder.PROVIDER.ARC_OFFICIAL
+    id_encode_provider: IDEncoder.PROVIDER = IDEncoder.PROVIDER.ARC_OFFICIAL_R50
     id_loss_weight: float = 1.0
 
     enable_wfm: bool = True
@@ -123,7 +125,6 @@ class TrainSet:
         default_factory=lambda: [
             ("/opt/share/deepfake/dataset_1/ffhq_1024/realign_arcface_dst", 0.0),
             ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024/realign_arcface_dst", 0.0),
-            ("/opt/share/deepfake/all_dataSet/generated_yellow-stylegan2", 0.0),
         ]
     )
 
@@ -158,7 +159,9 @@ class Trainer:
         # torch.set_float32_matmul_precision("high")
         # torch.backends.cuda.matmul.allow_tf32 = True
         # torch.backends.cudnn.allow_tf32 = True
-        print(f"AMP_DTYPE: {AMP_DTYPE}")
+        print(f"AMP: {cfg.enable_amp}")
+        if cfg.enable_amp:
+            print(f"AMP_DTYPE: {AMP_DTYPE}")
 
         self.cfg = cfg
         self.iter = 1
@@ -240,7 +243,8 @@ class Trainer:
         net_d_params = self.net_d.module.parameters() if cfg.is_distributed else self.net_d.parameters()
         net_g_params = self.net_g.module.parameters() if cfg.is_distributed else self.net_g.parameters()
 
-        enable_optimizer_fused = True if AMP_DTYPE == torch.bfloat16 else False
+        enable_optimizer_fused = True if AMP_DTYPE != torch.float16 else False
+        print(f"enable_optimizer_fused: {enable_optimizer_fused}")
         self.d_optimizer = torch.optim.Adam(params=net_d_params, lr=cfg.d_lr, betas=(0.0, 0.99), fused=enable_optimizer_fused)
         self.g_optimizer = torch.optim.Adam(params=net_g_params, lr=cfg.g_lr, betas=(0.0, 0.99), fused=enable_optimizer_fused)
 
@@ -259,7 +263,8 @@ class Trainer:
 
         # ------------------------ init AMP GradScaler ------------------------
         # bf16 不需要 GradScaler fp16 需要
-        enable_scaler = True if AMP_DTYPE == torch.float16 else False
+        enable_scaler = cfg.enable_amp and AMP_DTYPE == torch.float16
+        print(f"enable_scaler: {enable_scaler}")
         self.scaler_d = GradScaler(enabled=enable_scaler)
         self.scaler_g = GradScaler(enabled=enable_scaler)
 
@@ -440,7 +445,7 @@ class Trainer:
 
         for self.iter in pbar:
 
-            with autocast(device_type=DEVICE_TYPE, dtype=AMP_DTYPE):
+            with autocast(device_type=DEVICE_TYPE, dtype=AMP_DTYPE, enabled=cfg.enable_amp):
 
                 train_samples = self.fetch_training_batch(cfg.grad_accum_steps)
                 cached_ids: List[Tensor] = []
@@ -478,7 +483,7 @@ class Trainer:
                     if is_r1_reg_every:
                         with autocast(device_type=DEVICE_TYPE, enabled=False):
                             r1 = r1_penalty(real_pred, target)
-                        r1 = cfg.r1_reg_weight / 2 * r1 * cfg.r1_reg_every
+                            r1 = cfg.r1_reg_weight / 2 * r1 * cfg.r1_reg_every
                         d_loss += r1
                         self.loss_dict["r1"] = r1.detach()
                         target.requires_grad_(False)
@@ -722,25 +727,95 @@ if __name__ == "__main__":
     # cfg_8.enable_perceptual_loss = False
     # cfg = cfg_8
 
-    cfg_9 = TrainSet()
-    cfg_9.base_log_path = "log/train_9"
-    cfg_9.ckpt = "log/train_9/ckpt/1509690.pth"
-    cfg_9.batch_size = 20
-    cfg_9.d_lr = 0.0001
-    cfg_9.g_lr = 0.0001
-    cfg_9.enable_path_reg = False
-    cfg_9.noise_blank_level = 9
-    cfg_9.isconcat = True
-    cfg_9.id_loss_weight = 10.0
-    cfg_9.id_encode_provider = IDEncoder.PROVIDER.BLENDFACE
-    cfg_9.mask_loss_weight = 1.0
-    cfg_9.wfm_feat_index = {
+    # cfg_9 = TrainSet()
+    # cfg_9.base_log_path = "log/train_9"
+    # cfg_9.ckpt = "log/train_9/ckpt/1509690.pth"
+    # cfg_9.batch_size = 20
+    # cfg_9.d_lr = 0.0001
+    # cfg_9.g_lr = 0.0001
+    # cfg_9.enable_path_reg = False
+    # cfg_9.noise_blank_level = 9
+    # cfg_9.isconcat = True
+    # cfg_9.id_loss_weight = 10.0
+    # cfg_9.id_encode_provider = IDEncoder.PROVIDER.BLENDFACE
+    # cfg_9.mask_loss_weight = 1.0
+    # cfg_9.wfm_feat_index = {
+    #     5: 1.0,
+    # }
+    # cfg_9.wfm_weight = 1.0
+    # cfg_9.enable_hear = True
+    # cfg_9.same_prob = 0.1
+    # cfg_9.enable_perceptual_loss = True
+    # cfg = cfg_9
+
+    # cfg_10 = TrainSet()
+    # cfg_10.enable_amp = True
+    # cfg_10.base_log_path = "log/train_10"
+    # cfg_10.ckpt = "log/train_10/ckpt/263718.pth"
+    # cfg_10.batch_size = 28
+    # cfg_10.d_lr = 0.00175
+    # cfg_10.g_lr = 0.00175
+    # cfg_10.enable_path_reg = False
+    # cfg_10.noise_blank_level = 9
+    # cfg_10.isconcat = False
+    # cfg_10.id_loss_weight = 15.0
+    # cfg_10.id_encode_provider = IDEncoder.PROVIDER.BLENDFACE
+    # cfg_10.mask_loss_weight = 1.0
+    # cfg_10.wfm_feat_index = {
+    #     4: 1.0,
+    #     5: 1.0,
+    # }
+    # cfg_10.wfm_weight = 1.0
+    # cfg_10.enable_hear = False
+    # cfg_10.same_prob = 0.0
+    # cfg_10.enable_perceptual_loss = False
+    # cfg = cfg_10
+
+    cfg_11 = TrainSet()
+    cfg_11.base_log_path = "log/train_11"
+    cfg_11.ckpt = "log/train_11/ckpt/181484.pth"
+    cfg_11.batch_size = 24
+    cfg_11.d_lr = 0.0015
+    cfg_11.g_lr = 0.0015
+    cfg_11.enable_path_reg = False
+    cfg_11.noise_blank_level = 9
+    cfg_11.isconcat = False
+    cfg_11.id_loss_weight = 10.0
+    cfg_11.id_encode_provider = IDEncoder.PROVIDER.ARC_OFFICIAL_R100
+    cfg_11.mask_loss_weight = 1.0
+    cfg_11.wfm_feat_index = {
+        4: 0.5,
         5: 1.0,
     }
-    cfg_9.wfm_weight = 1.0
-    cfg_9.enable_hear = True
-    cfg_9.same_prob = 0.1
-    cfg_9.enable_perceptual_loss = True
-    cfg = cfg_9
+    cfg_11.wfm_weight = 1.0
+    cfg_11.enable_hear = True
+    cfg_11.same_prob = 0.1
+    cfg_11.enable_perceptual_loss = True
+    cfg_11.perceptual_loss_perceptual_weight = 1.0
+    cfg = cfg_11
+
+    # cfg_12 = TrainSet()
+    # cfg_12.enable_amp = False
+    # cfg_12.base_log_path = "log/train_7_f32"
+    # cfg_12.ckpt = "log/train_7_retrain/ckpt/1322105.pth"
+    # cfg_12.batch_size = 26
+    # cfg_12.d_lr = 0.0001
+    # cfg_12.g_lr = 0.0001
+    # cfg_12.enable_path_reg = False
+    # cfg_12.noise_blank_level = 9
+    # cfg_12.isconcat = False
+    # cfg_12.id_loss_weight = 10.0
+    # cfg_12.id_encode_provider = IDEncoder.PROVIDER.BLENDFACE
+    # cfg_12.mask_loss_weight = 1.0
+    # cfg_12.wfm_feat_index = {
+    #     4: 0.5,
+    #     5: 1.0,
+    # }
+    # cfg_12.wfm_weight = 1.0
+    # cfg_12.enable_hear = True
+    # cfg_12.same_prob = 0.1
+    # cfg_12.enable_perceptual_loss = True
+    # cfg_12.perceptual_loss_perceptual_weight = 1.0
+    # cfg = cfg_12
 
     train(cfg)
