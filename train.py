@@ -119,6 +119,7 @@ class TrainSet:
         default_factory=lambda: [
             ("/opt/share/deepfake/dataset_1/ffhq_1024/realign_arcface_dst", 0.0),
             ("/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024/realign_arcface_dst", 0.0),
+            ("/opt/share/deepfake/dataset_1/large_angle", -1.0),
         ]
     )
     source_folders: list[tuple[str, float]] = field(
@@ -321,7 +322,7 @@ class Trainer:
             self.writer = SummaryWriter(log_dir=self.tb_log_dir)
 
         # ------------------------ face utils ------------------------
-        self.face_pras = FaceParsing.Model().to(device=cfg.device)
+        self.face_pras = FaceParsing.Model(occ=True).to(device=cfg.device)
 
         # ------------------------------------------------
         if self.cfg.device.index == 0:
@@ -587,8 +588,13 @@ class Trainer:
                         target_mask = target_mask.sub_(0.5).mul_(2.0).expand(-1, 3, -1, -1)
 
                     sp = self.sample_dir / f"{self.iter}.png"
+                    source_cpu = source.detach().cpu()
+                    target_cpu = target.detach().cpu()
+                    target_mask_cpu = target_mask.detach().cpu()
+                    fake_cpu = fake.detach().cpu()
+                    fake_mask_cpu = fake_mask.detach().cpu()
 
-                    self.save_sample_queue.put((source, target, target_mask, fake, fake_mask, sp), block=False)
+                    self.save_sample_queue.put((source_cpu, target_cpu, target_mask_cpu, fake_cpu, fake_mask_cpu, sp), block=False)
 
                 if self.iter % cfg.save_ckpt_every == 0:
                     self.save_state_dict()
@@ -771,51 +777,52 @@ if __name__ == "__main__":
     # cfg_10.enable_perceptual_loss = False
     # cfg = cfg_10
 
-    cfg_11 = TrainSet()
-    cfg_11.base_log_path = "log/train_11"
-    cfg_11.ckpt = "log/train_11/ckpt/181484.pth"
-    cfg_11.batch_size = 24
-    cfg_11.d_lr = 0.0015
-    cfg_11.g_lr = 0.0015
-    cfg_11.enable_path_reg = False
-    cfg_11.noise_blank_level = 9
-    cfg_11.isconcat = False
-    cfg_11.id_loss_weight = 10.0
-    cfg_11.id_encode_provider = IDEncoder.PROVIDER.ARC_OFFICIAL_R100
-    cfg_11.mask_loss_weight = 1.0
-    cfg_11.wfm_feat_index = {
-        4: 0.5,
-        5: 1.0,
-    }
-    cfg_11.wfm_weight = 1.0
-    cfg_11.enable_hear = True
-    cfg_11.same_prob = 0.1
-    cfg_11.enable_perceptual_loss = True
-    cfg_11.perceptual_loss_perceptual_weight = 1.0
-    cfg = cfg_11
-
-    # cfg_12 = TrainSet()
-    # cfg_12.enable_amp = False
-    # cfg_12.base_log_path = "log/train_7_f32"
-    # cfg_12.ckpt = "log/train_7_retrain/ckpt/1322105.pth"
-    # cfg_12.batch_size = 26
-    # cfg_12.d_lr = 0.0001
-    # cfg_12.g_lr = 0.0001
-    # cfg_12.enable_path_reg = False
-    # cfg_12.noise_blank_level = 9
-    # cfg_12.isconcat = False
-    # cfg_12.id_loss_weight = 10.0
-    # cfg_12.id_encode_provider = IDEncoder.PROVIDER.BLENDFACE
-    # cfg_12.mask_loss_weight = 1.0
-    # cfg_12.wfm_feat_index = {
-    #     4: 0.5,
+    # cfg_11 = TrainSet()
+    # cfg_11.base_log_path = "log/train_11"
+    # cfg_11.ckpt = "log/train_11/ckpt/399486.pth"
+    # cfg_11.batch_size = 24
+    # cfg_11.d_lr = 0.0004
+    # cfg_11.g_lr = 0.0004
+    # cfg_11.enable_path_reg = False
+    # cfg_11.noise_blank_level = 9
+    # cfg_11.isconcat = False
+    # cfg_11.id_loss_weight = 10.0
+    # cfg_11.id_encode_provider = IDEncoder.PROVIDER.ARC_OFFICIAL_R100
+    # cfg_11.mask_loss_weight = 1.0
+    # cfg_11.wfm_feat_index = {
+    #     4: 1.0,
     #     5: 1.0,
     # }
-    # cfg_12.wfm_weight = 1.0
-    # cfg_12.enable_hear = True
-    # cfg_12.same_prob = 0.1
-    # cfg_12.enable_perceptual_loss = True
-    # cfg_12.perceptual_loss_perceptual_weight = 1.0
-    # cfg = cfg_12
+    # cfg_11.wfm_weight = 10.0
+    # cfg_11.enable_hear = True
+    # cfg_11.same_prob = 0.1
+    # cfg_11.enable_perceptual_loss = True
+    # cfg_11.perceptual_loss_perceptual_weight = 10.0
+    # cfg = cfg_11
+
+    cfg_12 = TrainSet()
+    cfg_12.enable_amp = False
+    cfg_12.base_log_path = "log/train_7_f32"
+    cfg_12.ckpt = "log/train_7_f32/ckpt/4280000.pth"
+    cfg_12.r1_reg_weight = 10
+    cfg_12.batch_size = 24
+    cfg_12.d_lr = 0.0001
+    cfg_12.g_lr = 0.0001
+    cfg_12.enable_path_reg = False
+    cfg_12.noise_blank_level = 9
+    cfg_12.isconcat = False
+    cfg_12.id_loss_weight = 12.5
+    cfg_12.id_encode_provider = IDEncoder.PROVIDER.BLENDFACE
+    cfg_12.mask_loss_weight = 1.0
+    cfg_12.wfm_feat_index = {
+        4: 0.5,
+        5: 0.5,
+    }
+    cfg_12.wfm_weight = 1.0
+    cfg_12.enable_hear = True
+    cfg_12.same_prob = 0.1
+    cfg_12.enable_perceptual_loss = True
+    cfg_12.perceptual_loss_perceptual_weight = 1.0
+    cfg = cfg_12
 
     train(cfg)

@@ -9,12 +9,15 @@ from .ops.fused_act import FusedLeakyReLU, fused_leaky_relu
 from .ops.upfirdn2d import upfirdn2d
 
 
+EPS = 1e-5
+
+
 class PixelNorm(nn.Module):
     def __init__(self):
         super().__init__()
 
     def forward(self, input: Tensor):
-        return input * torch.rsqrt(torch.mean(input**2, dim=1, keepdim=True) + 1e-8)
+        return input * torch.rsqrt(torch.mean(input**2, dim=1, keepdim=True) + EPS)
 
 
 def make_kernel(k):
@@ -106,7 +109,7 @@ class EqualConv2d(nn.Module):
             self.bias = None
 
     def forward(self, input: Tensor):
-        out = torch.conv2d(input, self.weight * self.scale, bias=self.bias, stride=self.stride, padding=self.padding)
+        out = F.conv2d(input, self.weight * self.scale, bias=self.bias, stride=self.stride, padding=self.padding)
 
         return out
 
@@ -203,13 +206,23 @@ class ModulatedConv2d(nn.Module):
         return f"{self.__class__.__name__}({self.in_channel}, {self.out_channel}, {self.kernel_size}, " f"upsample={self.upsample}, downsample={self.downsample})"
 
     def forward(self, input: Tensor, style: Tensor):
-        batch, in_channel, height, width = map(int, input.shape)
+        # batch, in_channel, height, width = map(int, input.shape)
+        # batch, in_channel, height, width = input.shape
+        if mode.EXPORT_MODE:
+            _, in_channel, height, width = input.shape
+            batch = 1
+        else:
+            batch, in_channel, height, width = input.shape
 
         style = self.modulation(style).view(batch, 1, in_channel, 1, 1)
+
         weight = self.scale * self.weight * style
 
         if self.demodulate:
-            demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-8)
+            demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + EPS)
+            # norm = torch.norm(weight, p=2, dim=[2, 3, 4])
+            # demod = 1.0 / (norm + EPS)
+
             weight = weight * demod.view(batch, self.out_channel, 1, 1, 1)
 
         weight = weight.view(batch * self.out_channel, in_channel, self.kernel_size, self.kernel_size)
@@ -218,23 +231,23 @@ class ModulatedConv2d(nn.Module):
             input = input.view(1, batch * in_channel, height, width)
             weight = weight.view(batch, self.out_channel, in_channel, self.kernel_size, self.kernel_size)
             weight = weight.transpose(1, 2).reshape(batch * in_channel, self.out_channel, self.kernel_size, self.kernel_size)
-            out = torch.conv_transpose2d(input, weight, padding=0, stride=2, groups=batch)
-            height, width = out.shape[-2:]
+            out = F.conv_transpose2d(input, weight, padding=0, stride=2, groups=batch)
+            _, _, height, width = out.shape
             out = out.view(batch, self.out_channel, height, width)
             out = self.blur(out)
 
         elif self.downsample:
             input = self.blur(input)
-            height, width = input.shape[-2:]
+            _, _, height, width = input.shape
             input = input.view(1, batch * in_channel, height, width)
-            out = torch.conv2d(input, weight, padding=0, stride=2, groups=batch)
-            height, width = out.shape[-2:]
+            out = F.conv2d(input, weight, padding=0, stride=2, groups=batch)
+            _, _, height, width = out.shape
             out = out.view(batch, self.out_channel, height, width)
 
         else:
             input = input.view(1, batch * in_channel, height, width)
-            out = torch.conv2d(input, weight, padding=self.padding, groups=batch)
-            height, width = out.shape[-2:]
+            out = F.conv2d(input, weight, padding=self.padding, groups=batch)
+            _, _, height, width = out.shape
             out = out.view(batch, self.out_channel, height, width)
 
         return out
@@ -428,7 +441,7 @@ class Generator(nn.Module):
     def conver_noise_withmask(self, noise: Tensor, mask: Tensor):
         color_sum = (noise * mask).sum(dim=(2, 3), keepdim=True)
         mask_sum = mask.sum(dim=(2, 3), keepdim=True)
-        ratio = color_sum / mask_sum.clamp_min(1e-8)
+        ratio = color_sum / mask_sum.clamp_min(1e-4)
         out = torch.lerp(noise, ratio, mask)
         return out
 
@@ -594,7 +607,10 @@ class FullGenerator(nn.Module):
 
         self.final_linear = nn.Sequential(EqualLinear(style_dim, style_dim, activation="fused_lrelu"))
 
+    # mode.EXPORT_MODE为True时输入NHWC，输出NHWC
     def forward(self, inputs: Tensor, id_emb: Tensor, return_latents=True, inject_index=None, truncation=1, truncation_latent=None, input_is_latent=False, noise_blank_level=9):
+        if mode.EXPORT_MODE:
+            inputs = inputs.permute(0, 3, 1, 2)
 
         noise = []
         for i in range(self.log_size - 1):
@@ -610,9 +626,11 @@ class FullGenerator(nn.Module):
         )
 
         if mode.EXPORT_MODE:
+            out_img = out_img.permute(0, 2, 3, 1)
+            mask = mask.permute(0, 2, 3, 1)
             return out_img, mask
-
-        return out_img, latent, mask
+        else:
+            return out_img, latent, mask
 
 
 class StyleGAN2Discriminator(nn.Module):
@@ -688,7 +706,7 @@ class StyleGAN2Discriminator(nn.Module):
             group = b
             n = 1
         y = out.view(group, n, self.stddev_feat, c // self.stddev_feat, h, w)
-        y = torch.sqrt(y.var(dim=0, unbiased=False) + 1e-8)  # [n, f, c//f, h, w]
+        y = torch.sqrt(y.var(dim=0, unbiased=False) + EPS)  # [n, f, c//f, h, w]
         y = y.mean(dim=[2, 3, 4])  # [n, f]
         y = y.repeat_interleave(group, dim=0).view(b, self.stddev_feat, 1, 1)  # [b, f, 1, 1]
         y = y.expand(b, self.stddev_feat, h, w)  # [b, f, h, w]
@@ -746,6 +764,15 @@ class MultiScaleDiscriminator(nn.Module):
         self.discriminators[0].load_state_dict(wg)
 
 
+def zero_hook(module, input, output):
+    if isinstance(output, torch.Tensor):
+        near_zero = (output.abs() < ZERO_THRESH).float().mean().item()
+        if near_zero > MIN_RATIO:
+            print(
+                f"[Near-zero output] {module.__class__.__name__} | shape={tuple(output.shape)} | near-zero ratio={near_zero:.4f} | min={output.min().item():.4e}, max={output.max().item():.4e}"
+            )
+
+
 if __name__ == "__main__":
     import torchvision.utils as utils
     from prettytable import PrettyTable
@@ -770,25 +797,40 @@ if __name__ == "__main__":
     # for idx, feat in enumerate(feats):
     #     img = feat.mean(dim=1, keepdim=True)
     #     utils.save_image(img, f"visi_feat_{idx}.png")
-
+    mode.EXPORT_MODE = True
     model = FullGenerator(size, isconcat=False).to(device)
 
-    table = PrettyTable(["Layer", "Shape", "Param # (M)", "Trainable"])
-    total = 0
+    ZERO_THRESH = 1e-2  # 绝对值小于该值视为接近0
+    MIN_RATIO = 0.01  # 当接近0的元素占比超过该值时打印
 
-    for name, p in model.named_parameters():
-        num = p.numel()
-        table.add_row([name, list(p.shape), f"{num / 1e6:.6f}", p.requires_grad])
-        total += num
-
-    print(table)
-    print(f"Total params: {total / 1e6:.3f} M")
+    hooks = []
+    for name, module in model.named_modules():
+        # 只注册最底层层，避免重复打印
+        if not list(module.children()):
+            h = module.register_forward_hook(zero_hook)
+            hooks.append(h)
 
     source = torch.randn(batch_size, 3, size, size).to(device)
-    id = torch.randn(batch_size, 512).to(device)
-    model(source, id)
+    id_emb = torch.randn(batch_size, 512).to(device)
+    model(source, id_emb)
+    print("123")
 
-    from fvcore.nn import FlopCountAnalysis
+    # table = PrettyTable(["Layer", "Shape", "Param # (M)", "Trainable"])
+    # total = 0
 
-    flops = FlopCountAnalysis(model, (source, id))
-    print(f"Total FLOPs: {flops.total() / 1e9:.3f} GFLOPs")
+    # for name, p in model.named_parameters():
+    #     num = p.numel()
+    #     table.add_row([name, list(p.shape), f"{num / 1e6:.6f}", p.requires_grad])
+    #     total += num
+
+    # print(table)
+    # print(f"Total params: {total / 1e6:.3f} M")
+
+    # source = torch.randn(batch_size, 3, size, size).to(device)
+    # id = torch.randn(batch_size, 512).to(device)
+    # model(source, id)
+
+    # from fvcore.nn import FlopCountAnalysis
+
+    # flops = FlopCountAnalysis(model, (source, id))
+    # print(f"Total FLOPs: {flops.total() / 1e9:.3f} GFLOPs")

@@ -185,12 +185,8 @@ class FeatureFusionModule(nn.Module):
     def __init__(self, in_chan, out_chan, *args, **kwargs):
         super(FeatureFusionModule, self).__init__()
         self.convblk = ConvBNReLU(in_chan, out_chan, ks=1, stride=1, padding=0)
-        self.conv1 = nn.Conv2d(
-            out_chan, out_chan // 4, kernel_size=1, stride=1, padding=0, bias=False
-        )
-        self.conv2 = nn.Conv2d(
-            out_chan // 4, out_chan, kernel_size=1, stride=1, padding=0, bias=False
-        )
+        self.conv1 = nn.Conv2d(out_chan, out_chan // 4, kernel_size=1, stride=1, padding=0, bias=False)
+        self.conv2 = nn.Conv2d(out_chan // 4, out_chan, kernel_size=1, stride=1, padding=0, bias=False)
         self.relu = nn.ReLU(inplace=True)
         self.sigmoid = nn.Sigmoid()
         self.init_weight()
@@ -237,11 +233,11 @@ class BiSeNet(nn.Module):
         self.conv_out32 = BiSeNetOutput(128, 64, n_classes)
         self.init_weight()
 
-    def forward(self, x, h_w: Tuple[int, int] | None = None):
-        if h_w is None:
-            H, W = x.size()[2:]
-        else:
-            H, W = h_w[0:]
+    def forward(
+        self,
+        x,
+    ):
+
         feat_res8, feat_cp8, feat_cp16 = self.cp(x)  # here return res3b1 feature
         feat_sp = feat_res8  # use res3b1 feature to replace spatial path feature
         feat_fuse = self.ffm(feat_sp, feat_cp8)
@@ -250,7 +246,7 @@ class BiSeNet(nn.Module):
         # feat_out16 = self.conv_out16(feat_cp8)
         # feat_out32 = self.conv_out32(feat_cp16)
 
-        feat_out = F.interpolate(feat_out, (H, W), mode="bilinear", align_corners=True)
+        # feat_out = F.interpolate(feat_out, (H, W), mode="bilinear", align_corners=True)
         # feat_out16 = F.interpolate(
         #     feat_out16, (H, W), mode="bilinear", align_corners=True
         # )
@@ -271,9 +267,7 @@ class BiSeNet(nn.Module):
         wd_params, nowd_params, lr_mul_wd_params, lr_mul_nowd_params = [], [], [], []
         for name, child in self.named_children():
             child_wd_params, child_nowd_params = child.get_params()
-            if isinstance(child, FeatureFusionModule) or isinstance(
-                child, BiSeNetOutput
-            ):
+            if isinstance(child, FeatureFusionModule) or isinstance(child, BiSeNetOutput):
                 lr_mul_wd_params += child_wd_params
                 lr_mul_nowd_params += child_nowd_params
             else:

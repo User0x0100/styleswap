@@ -179,6 +179,12 @@ class ONNXExporter:
         _ensure_dir(onnx_path)
         model_module.eval()
 
+        # import torch_tensorrt
+
+        # model_trt = torch_tensorrt.compile(model_module, ir="dynamo", inputs=sample_input)
+
+        # torch_tensorrt.save(module=model_trt, file_path="test.engine", output_format="aot_inductor")
+
         torch.onnx.export(
             model_module,
             sample_input,
@@ -186,15 +192,42 @@ class ONNXExporter:
             opset_version=opset_version,
             export_params=True,
             dynamo=True,
-            fallback=True,
+            fallback=False,
             optimize=True,
             verify=True,
             external_data=False,
             keep_initializers_as_inputs=False,
             verbose=True,
+            # report=True,
+            profile=True,
         )
 
+        # torch_tensorrt.save(trt_gm,"test.engine",output_format=)
+
+        # from onnxconverter_common.float16 import convert_float_to_float16
+        # from onnxconverter_common import auto_mixed_precision, auto_convert_mixed_precision
+        # import numpy as np
+
         onnx_model = onnx.load(onnx_path)
+        # onnx_model = convert_float_to_float16(
+        #     onnx_model,
+        #     # min_positive_val=1e-4,
+        #     keep_io_types=True,
+        # )
+
+        # onnx_model = auto_convert_mixed_precision(
+        #     onnx_model,
+        #     feed_dict={
+        #         "inputs": np.random.rand(1, 3, 512, 512).astype(np.float32),
+        #         "id_emb": np.random.rand(1, 512).astype(np.float32),
+        #     },
+        #     rtol=0.01,
+        #     atol=0.001,
+        #     keep_io_types=True,
+        # )
+
+        # onnx.save_model(onnx_model, onnx_path + ".fp16")
+
         onnx.checker.check_model(onnx_model, full_check=True)
         print(f"✅ 模型成功导出到: {onnx_path}")
         print_onnx_summary(onnx_model)
@@ -284,8 +317,9 @@ class ONNXExporter:
         m.load_state_dict(ckpt_obj["g_ema"], strict=True)
         m.eval()
 
-        target = torch.randn(1, 3, train_info.size, train_info.size, device=self.device)
-        id_tensor = torch.randn(1, train_info.style_dim, device=self.device)
+        target = torch.rand(1, train_info.size, train_info.size, 3, device=self.device).uniform_(-1, 1)
+        id_tensor = torch.rand(1, train_info.style_dim, device=self.device).uniform_(-1, 1)
+
         sample_inputs: Tuple[torch.Tensor, torch.Tensor] = (target, id_tensor)
 
         self.export_model(m, sample_inputs, sp, opset_version=opset_version)
@@ -308,9 +342,9 @@ class ONNXExporter:
 if __name__ == "__main__":
     exp = ONNXExporter(device=torch.device("cuda:0"))
 
-    swap_ckpt = "log/train_12/ckpt/15000.pth"
+    swap_ckpt = "log/train_7_f32/ckpt/3620000.pth"
     swap_onnx_sp = "onnx_model/512.onnx"
     idencode_onnx_sp = "onnx_model/id_encode.onnx"
 
     id_encode_provider = exp.export_swap(swap_ckpt, swap_onnx_sp)
-    exp.export_idencode(idencode_onnx_sp, id_encode_provider=id_encode_provider)
+    # exp.export_idencode(idencode_onnx_sp, id_encode_provider=id_encode_provider)

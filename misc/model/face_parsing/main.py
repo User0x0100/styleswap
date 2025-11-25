@@ -9,7 +9,7 @@ from .bisenet import BiSeNet
 
 class Model(nn.Module):
 
-    def __init__(self, compile_model: bool = True, range_norm: bool = True):
+    def __init__(self, compile_model: bool = True, range_norm: bool = True, occ: bool = False):
         """
         Args:
             range_norm (bool): If True, norm images with range [-1, 1] to [0, 1].
@@ -18,10 +18,26 @@ class Model(nn.Module):
         super().__init__()
 
         self.range_norm = range_norm
-        self.net = BiSeNet(n_classes=19)
+        self.occ = occ
 
-        model_path = Path(__file__).with_name("79999_iter.pth")
-        self.net.load_state_dict(torch.load(model_path, map_location=torch.device("cpu"), weights_only=True))
+        if self.occ:
+            import segmentation_models_pytorch as smp
+
+            # model = smp.Unet(encoder_name=ENCODER, encoder_weights="imagenet", decoder_attention_type=ATTENTION, classes=CLASSES, activation=ACTIVATION)
+            self.net = smp.Unet(encoder_name="resnet18", encoder_weights=None, decoder_attention_type=None, classes=1, activation=None)
+
+            encoder_state_dict = torch.load(Path(__file__).with_name("resnet18-5c106cde.pth"), weights_only=False)
+            self.net.encoder.load_state_dict(encoder_state_dict)
+
+            state_dict = torch.load(Path(__file__).with_name("epoch_16_best.ckpt"))
+            state_dict = {cleaned: v for k, v in state_dict.items() if (cleaned := k.removeprefix("module."))}
+            self.net.load_state_dict(state_dict)
+
+        else:
+            self.net = BiSeNet(n_classes=19)
+            model_path = Path(__file__).with_name("79999_iter.pth")
+            self.net.load_state_dict(torch.load(model_path, map_location=torch.device("cpu"), weights_only=True))
+
         if compile_model:
             self.net = torch.compile(
                 self.net,
@@ -44,14 +60,25 @@ class Model(nn.Module):
     @torch.no_grad()
     def process(self, image: torch.Tensor):
         H, W = image.size()[2:]
-        image = F.interpolate(image, [512, 512], mode="bicubic")
+
+        if self.occ:
+            image = F.interpolate(image, [224, 224], mode="bicubic")
+        else:
+            image = F.interpolate(image, [512, 512], mode="bicubic")
+            image.sub_(self.mean).div_(self.std)
+
         if self.range_norm:
             image.add_(1.0).div_(2.0)
 
-        image.sub_(self.mean).div_(self.std)
-        out = self.net(image, h_w=[H, W])
-        parsing = out.argmax(dim=1)
-        mask = torch.isin(parsing, self.parts_idx).to(dtype=torch.float).unsqueeze(1)
+        mask = self.net(image)
+        mask = F.interpolate(mask, (H, W), mode="bilinear", align_corners=True)
+
+        if self.occ:
+            mask = (mask > 0).to(dtype=torch.float)
+        else:
+            parsing = mask.argmax(dim=1)
+            mask = torch.isin(parsing, self.parts_idx).to(dtype=torch.float).unsqueeze(1)
+
         return mask
 
 
@@ -63,10 +90,11 @@ if __name__ == "__main__":
     from torchvision.io import read_image
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    batch_size = 24
+    batch_size = 4
     print(f"使用设备: {device}")
 
-    parser = Model(device=device, range_norm=True)
+    parser = Model(range_norm=True, occ=True)
+    parser.to(device)
 
     images = [read_image(f"/opt/share/deepfake/dataset_1/ffhq_1024/{random.randint(0,69999):05d}.png") for _ in range(batch_size)]
 
@@ -76,6 +104,9 @@ if __name__ == "__main__":
     # -1~1
     images = [img.float() / 127.5 - 1.0 for img in images]
     images = torch.stack(images, dim=0).to(device=device)
+
+    for i in range(10):
+        mask = parser.process(images)
 
     # 性能测试
     print("执行性能测试...")

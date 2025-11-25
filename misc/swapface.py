@@ -10,6 +10,7 @@ from torchcodec.decoders import VideoDecoder
 from torchvision.io import decode_image
 from tqdm import tqdm
 
+from misc.model.idencoder.main import PROVIDER
 from model import FullGenerator
 from losses.id_loss import IDLoss
 from misc.model import FaceParsing
@@ -22,7 +23,7 @@ from .utils import DataFolder
 class Swapper(nn.Module):
     G_STATE_DICT = "g_ema"
 
-    def __init__(self, ckpt: str, size: int = 512, isconcat: bool = False, align_dst: None | torch.Tensor = None):
+    def __init__(self, ckpt: str, size: int = 512, isconcat: bool = False, align_dst: None | torch.Tensor = None, id_encode_provider: PROVIDER = PROVIDER.ARC_OFFICIAL_R50):
         super().__init__()
 
         checkpoint = torch.load(ckpt, map_location=torch.device("cpu"), weights_only=False)
@@ -45,7 +46,7 @@ class Swapper(nn.Module):
 
         self.aligner = FaceAlign(from_normalized=True)
 
-        self.idencoder = IDLoss(id_encode_provider=IDEncoder.PROVIDER.BLENDFACE)
+        self.idencoder = IDLoss(id_encode_provider=id_encode_provider)
 
         if align_dst is None:
             align_dst = IDEncoder.get_dst_pts(size)
@@ -86,7 +87,7 @@ class Swapper(nn.Module):
         return id_emb
 
     @autocast(device_type="cuda")
-    def swap_folder(self, fp: str, source: str | None = None, wfp: str | None = None, sf_prefix: str = "", batch_size: int = 32):
+    def swap_folder(self, fp: str, source: str | None = None, wfp: str | None = None, sf_prefix: str = "", batch_size: int = 8):
 
         device = self.align_dst.device
         data_folder = DataFolder(fp)
@@ -183,6 +184,7 @@ class Swapper(nn.Module):
                 swaped_face, face_mask = self.swap_single(aligned, id_emb[:1])
                 fake_id = self.idencoder.extract_id_feats(swaped_face, face_mask)
                 similarity = F.cosine_similarity(fake_id, id_emb.expand(fake_id.shape[0], -1))
+                swaped_face = swaped_face * face_mask + aligned * (1.0 - face_mask)
 
                 pbar.set_description_str(f"相似度: {similarity.mean():.4f}")
                 q.put(swaped_face)
@@ -205,7 +207,7 @@ if __name__ == "__main__":
     # dataset = DataFolder("IDAssets")
     logger.info(f"{dataset=}")
 
-    ckpt = "log/train_7_f32/ckpt/1325000.pth"
+    ckpt = "log/train_7_f32/ckpt/4435000.pth"
     logger.info(f"{ckpt=}")
 
     target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
@@ -215,9 +217,9 @@ if __name__ == "__main__":
     # target = "/opt/share/deepfake/linshi/录屏素材/2025-07-03(蒋女士 林嘉惠 王钰 符媛媛 石星儿)/王钰(电脑录屏).mp4"
 
     source = dataset.sample(rando=True)
-    source = "IDAssets/Henry_Cavill.webp"
-    logger.info(f"{source=}")
+    source = "IDAssets/wuyanzu.png"
+    # logger.info(f"{source=}")
 
-    swap = Swapper(ckpt).to(device=device)
-    # swap.swap_folder("IDAssets", source, sf_prefix="train_11_")  # /opt/share/deepfake/linshi/stylegan2_test_ret
+    swap = Swapper(ckpt, id_encode_provider=PROVIDER.BLENDFACE).to(device=device)
+    # swap.swap_folder("org2", source, sf_prefix="train_7_f32_")  # /opt/share/deepfake/linshi/stylegan2_test_ret
     swap.swap_video(target, source)
