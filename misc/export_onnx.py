@@ -342,9 +342,9 @@ class ONNXExporter:
 if __name__ == "__main__":
     exp = ONNXExporter(device=torch.device("cuda:0"))
 
-    swap_ckpt = "log/train_7_f32/ckpt/3620000.pth"
+    swap_ckpt = "log/train_7_f32/ckpt/5335000.pth"
     swap_onnx_sp = "onnx_model/512.onnx"
     idencode_onnx_sp = "onnx_model/id_encode.onnx"
 
     id_encode_provider = exp.export_swap(swap_ckpt, swap_onnx_sp)
-    # exp.export_idencode(idencode_onnx_sp, id_encode_provider=id_encode_provider)
+    exp.export_idencode(idencode_onnx_sp, id_encode_provider=id_encode_provider)

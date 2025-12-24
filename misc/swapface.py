@@ -207,7 +207,7 @@ if __name__ == "__main__":
     # dataset = DataFolder("IDAssets")
     logger.info(f"{dataset=}")
 
-    ckpt = "log/train_7_f32/ckpt/4435000.pth"
+    ckpt = "log/train_7_f32/ckpt/5035000.pth"
     logger.info(f"{ckpt=}")
 
     target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"
