@@ -21,7 +21,7 @@ from misc.model import FaceParsing
 
 from .model import ArcFace
 from .tools import FaceAlign, tensor2cv_8uc3_bgr
-from .utils import DataFolder
+from .utils import ImageFolder
 
 
 class EmbeddingSpaceExplorer:
@@ -330,7 +330,7 @@ class Swapper(nn.Module):
         image = image.to(device=device, dtype=torch.float).div_(255.0).mul_(2.0).sub_(1.0).unsqueeze_(0)
         align_face, _, _ = self.aligner.align(images=image, out_size=(ArcFace.SIZE,) * 2, dst_pts5_pixel=ArcFace.get_dst_pts().to(device=device))
 
-        face_mask = self.facepars.process(align_face)
+        face_mask = self.facepars.forward(align_face)
         align_face = align_face * face_mask
         id_emb = self.arcface(align_face)
 
@@ -484,11 +484,11 @@ if __name__ == "__main__":
 
     from loguru import logger
 
-    from misc.utils import DataFolder
+    from misc.utils import ImageFolder
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"{device=}")
-    dataset = DataFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
+    dataset = ImageFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
     # dataset = DataFolder("IDAssets")
     logger.info(f"{dataset=}")
 

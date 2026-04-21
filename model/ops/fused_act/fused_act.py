@@ -1,10 +1,10 @@
 # modify from https://github.com/rosinality/stylegan2-pytorch/blob/master/op/fused_act.py # noqa:E501
 
-import os
-from functools import lru_cache
-
+from pathlib import Path
 import torch
+from torch import Tensor
 import torch.nn.functional as F
+from torch.autograd.function import FunctionCtx
 from torch import Tensor, nn
 from torch.amp import custom_fwd
 from torch.autograd import Function
@@ -13,38 +13,23 @@ from torch.utils.cpp_extension import load
 from ... import mode
 
 
-_MODULE_PATH = os.path.dirname(__file__)
-build_dir = os.path.join(_MODULE_PATH, "torch_ext_build")
-os.makedirs(build_dir, exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent
 
-
-@lru_cache(maxsize=1)
-def get_fused_act_ext():
-    return load(
-        name="fused",
-        sources=[
-            os.path.join(_MODULE_PATH, "src", "fused_bias_act.cpp"),
-            os.path.join(_MODULE_PATH, "src", "fused_bias_act_kernel.cu"),
-        ],
-        build_directory=build_dir,
-        verbose=False,
-    )
-
-
-fused_act_ext = get_fused_act_ext()
+fused_act_ext = load(name="fused", sources=[BASE_DIR / "src" / "fused_bias_act.cpp", BASE_DIR / "src" / "fused_bias_act_kernel.cu"], verbose=False)
 
 
 class FusedLeakyReLUFunctionBackward(Function):
 
     @staticmethod
-    def forward(ctx, grad_output, out, negative_slope, scale):
+    def forward(ctx: FunctionCtx, grad_output: Tensor, out: Tensor, negative_slope: float, scale: float) -> tuple[Tensor, Tensor]:
+
         ctx.save_for_backward(out)
         ctx.negative_slope = negative_slope
         ctx.scale = scale
 
-        empty = grad_output.new_empty(0)
+        empty: Tensor = grad_output.new_empty(0)
 
-        grad_input = fused_act_ext.fused_bias_act(grad_output, empty, out, 3, 1, negative_slope, scale)
+        grad_input: Tensor = fused_act_ext.fused_bias_act(grad_output, empty, out, 3, 1, negative_slope, scale)
 
         dim = [0]
 
@@ -56,7 +41,7 @@ class FusedLeakyReLUFunctionBackward(Function):
         return grad_input, grad_bias
 
     @staticmethod
-    def backward(ctx, gradgrad_input, gradgrad_bias):
+    def backward(ctx: FunctionCtx, gradgrad_input: Tensor, gradgrad_bias: Tensor) -> tuple[Tensor, None, None, None]:
         (out,) = ctx.saved_tensors
         gradgrad_out = fused_act_ext.fused_bias_act(gradgrad_input, gradgrad_bias, out, 3, 1, ctx.negative_slope, ctx.scale)
 
@@ -66,7 +51,7 @@ class FusedLeakyReLUFunctionBackward(Function):
 class FusedLeakyReLUFunction(Function):
 
     @staticmethod
-    def forward(ctx, input, bias, negative_slope, scale):
+    def forward(ctx: FunctionCtx, input: Tensor, bias: Tensor, negative_slope: float, scale: float) -> Tensor:
         empty = input.new_empty(0)
         out = fused_act_ext.fused_bias_act(input, bias, empty, 3, 0, negative_slope, scale)
         ctx.save_for_backward(out)
@@ -86,19 +71,20 @@ class FusedLeakyReLUFunction(Function):
 
 class FusedLeakyReLU(nn.Module):
 
-    def __init__(self, channel, negative_slope=0.2, scale=2**0.5):
+    def __init__(self, channel: int, negative_slope: float = 0.2, scale: float = 2**0.5):
         super().__init__()
 
         self.bias = nn.Parameter(torch.zeros(channel))
         self.negative_slope = negative_slope
         self.scale = scale
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         return fused_leaky_relu(input, self.bias, self.negative_slope, self.scale)
 
 
 @custom_fwd(device_type="cuda", cast_inputs=torch.float)
 def fused_leaky_relu(input: Tensor, bias: Tensor, negative_slope: float = 0.2, scale: float = 2**0.5) -> Tensor:
+
     if input.device.type == "cpu" or mode.EXPORT_MODE:
         return scale * F.leaky_relu(input + bias.view((1, -1) + (1,) * (input.ndim - 2)), negative_slope=negative_slope)
     else:

@@ -1,0 +1,80 @@
+src:
+  # - ["/opt/share/deepfake/dataset_1/ffhq_1024/realign_arcface_dst", 0.0]
+  # - ["/opt/share/deepfake/dataset_1/youtube/What_s_considered_tall_in_South_Korea_Street_Interview_align_results", 0.0]
+  # - ["/opt/share/deepfake/dataset_1/youtube/4k_Face_Close_Up_HDR_Video_Vivid_Colors_Ambient_Sound_-_Relaxing_align_results", 0.0]
+  # - ["/opt/share/deepfake/wang_train_data2/大侧脸/3d_全2", 0.0]
+  # - ["/opt/share/deepfake/wang_train_data2/大侧脸/renwu_dace", 0.0]
+  # - ["/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024/realign_arcface_dst", 0.0]
+  # - ["/opt/share/deepfake/dataset_1/RealOcc/image/realign_arcface_dst", 1.0]
+  # - ["/opt/share/deepfake/all_dataSet/baidu爬取男性45度侧脸及各种风格脸型dst(已经切脸，没有mask)", 0.0]
+  # - ["/opt/share/deepfake/all_dataSet/baidu爬取女性人脸", 0.0]
+  # - ["/opt/share/deepfake/all_dataSet/男女混合/aligned", 0.0]
+  - ["faceset/ljx/arcface_pts", 0.0]
+  - ["faceset/ljx/comfyui_1", 0.0]
+  - ["faceset/ljx/comfyui", 0.0]
+  - ["faceset/ljx/org", 0.0]
+  # - ["/opt/share/deepfake/dataset_1/oneman/1_align_results/", 0.0]
+
+dst:
+  - ["faceset/ljx/arcface_pts", 0.0]
+  - ["faceset/ljx/comfyui", 0.0]
+  - ["faceset/ljx/org", 0.0]
+  - ["/opt/share/deepfake/dataset_1/ffhq_1024/realign_arcface_dst", 0.0]
+  - ["/opt/share/deepfake/dataset_1/youtube/What_s_considered_tall_in_South_Korea_Street_Interview_align_results", 0.0]
+  - ["/opt/share/deepfake/dataset_1/youtube/4k_Face_Close_Up_HDR_Video_Vivid_Colors_Ambient_Sound_-_Relaxing_align_results", 0.0]
+  - ["/opt/share/deepfake/wang_train_data2/大侧脸/3d_全2", 0.0]
+  - ["/opt/share/deepfake/wang_train_data2/大侧脸/renwu_dace", 0.0]
+  - ["/opt/share/deepfake/dataset_1/CelebAHQ-1024x1024/realign_arcface_dst", 0.0]
+  - ["/opt/share/deepfake/dataset_1/RealOcc/image/realign_arcface_dst", 1.0]
+  - ["/opt/share/deepfake/all_dataSet/baidu爬取男性45度侧脸及各种风格脸型dst(已经切脸，没有mask)", 0.0]
+  - ["/opt/share/deepfake/all_dataSet/baidu爬取女性人脸", 0.0]
+  - ["/opt/share/deepfake/all_dataSet/男女混合/aligned", 0.0]
+  - ["/opt/share/deepfake/dataset_1/oneman/1_align_results/", 0.0]
+
+set_iter: null
+lr: 5.0e-5
+lr_scheduler_t_max: 0
+batch_size: 8
+device: "cuda:0"
+bf16: true
+compile_model: true
+log_path: "log_dfm/train_df_test"
+sample_save_every: 2000
+weight_save_every: 20000
+
+pretrain: false
+
+weight: "log_dfm/train_df/ckpt/3973632.pth"
+## defaule true
+# weight_load_selection:
+#   encoder: true
+#   inter: true
+#   decoder_src: true
+#   decoder_dst: true
+#   discriminator: true
+
+seg_mask_with_occ: true
+masked_train: true
+blur_mask: true
+
+dssim_loss_weight: 0.75
+
+pixel_loss_weight: 10.0
+mask_loss_weight: 10.0
+
+src_random_warp_prob: 0.0
+dst_random_warp_prob: 0.0
+
+gan_power: 0.0
+gan_update_every: 5
+
+face_style_power: 0.0
+
+face_id: ["faceset/ljx/arcface_pts/610_0.png", 0.0]
+
+arch_type: "DF"
+resolution: 320
+e_dims: 64
+ae_dims: 512
+d_dims: 64
+d_mask_dims: 22

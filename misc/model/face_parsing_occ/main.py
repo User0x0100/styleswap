@@ -2,7 +2,7 @@ from pathlib import Path
 import segmentation_models_pytorch as smp
 import torch
 from torch.nn import functional as F
-from misc.utils import DataFolder
+from misc.utils import ImageFolder
 import torchvision.utils as utils
 
 # https://github.com/face3d0725/FaceExtraction/blob/main/Dataset/utils.py

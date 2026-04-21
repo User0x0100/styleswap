@@ -480,6 +480,8 @@ class FaceAlign(nn.Module):
             return
 
         q.put((None,) * 3)
+        p.join()
+
 
     @staticmethod
     def align_folder_save_worker(q: mp.Queue, wfp: str, sf_prefix: str, value_range):
@@ -528,12 +530,12 @@ class FaceAlign(nn.Module):
         p = mp.Process(target=self.align_folder_save_worker, args=(q, sfp, sf_prefix, (0, 255)), daemon=True)
         p.start()
 
-        dataset = DataFolder(fp)
+        dataset = ImageFolder(fp)
 
         pbar = tqdm(range(dataset.len), unit="frame")
         pbar.set_description(fp)
         try:
-            for images, fns in dataset.iter_batch_with_tensor(batch_size, True, False):
+            for images, fns in dataset.iter_batch_with_tensor(batch_size, True):
 
                 pbar.update(len(images))
 
@@ -552,13 +554,13 @@ class FaceAlign(nn.Module):
 if __name__ == "__main__":
     from torch import autocast
 
-    from misc.utils import DataFolder
+    from misc.utils import ImageFolder
 
     from .model import IDEncoder
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 6
-    dataset = DataFolder("IDAssets")
+    dataset = ImageFolder("IDAssets")
     # dataset = DataFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
     aligner = FaceAlign().to(device=device)
 
@@ -580,16 +582,16 @@ if __name__ == "__main__":
     # for idx, image in enumerate(restored):
     #     utils.save_image(image, f"visi_aligned{str(idx)}.png", normalize=True, value_range=(0, 1))
 
-    # vfp = "/opt/share/deepfake/dataset_1/youtube/4k_Face_Close_Up_HDR_Video_Vivid_Colors_Ambient_Sound_-_Relaxing.webm"
-    # dst_pts_pixel = ArcFace.get_dst_pts(512).to(device=device)
-    # aligner.video_face_ext(vfp=vfp, dst_pts_pixel=dst_pts_pixel, out_size=(512,) * 2, batch_size=128, conf_thresh=0.95, min_box_size=512)
-
+    vfp = "comfyui-00069_aLulxBJz.mp4"
     dst_pts_pixel = IDEncoder.get_dst_pts(512).to(device=device)
-    aligner.align_folder(
-        fp="org2",
-        dst_pts_pixel=dst_pts_pixel,
-        sfp="org2/realign_arcface_dst",
-        batch_size=64,
-        out_size=(512,) * 2,
-        min_box_size=256,
-    )
+    aligner.video_face_ext(vfp=vfp, dst_pts_pixel=dst_pts_pixel, out_size=(512,) * 2, batch_size=128, conf_thresh=0.8, min_box_size=128)
+
+    # dst_pts_pixel = IDEncoder.get_dst_pts(512).to(device=device)
+    # aligner.align_folder(
+    #     fp="faceset/ljx_after_processing",
+    #     dst_pts_pixel=dst_pts_pixel,
+    #     sfp="faceset/ljx_after_processing/realign_arcface_dst",
+    #     batch_size=64,
+    #     out_size=(512,) * 2,
+    #     min_box_size=128,
+    # )

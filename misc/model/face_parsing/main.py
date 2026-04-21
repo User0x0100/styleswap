@@ -4,12 +4,9 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .bisenet import BiSeNet
-
 
 class Model(nn.Module):
-
-    def __init__(self, compile_model: bool = True, range_norm: bool = True, occ: bool = False):
+    def __init__(self, range_norm: bool = True, occ: bool = False, compile_model: bool = True):
         """
         Args:
             range_norm (bool): If True, norm images with range [-1, 1] to [0, 1].
@@ -23,7 +20,6 @@ class Model(nn.Module):
         if self.occ:
             import segmentation_models_pytorch as smp
 
-            # model = smp.Unet(encoder_name=ENCODER, encoder_weights="imagenet", decoder_attention_type=ATTENTION, classes=CLASSES, activation=ACTIVATION)
             self.net = smp.Unet(encoder_name="resnet18", encoder_weights=None, decoder_attention_type=None, classes=1, activation=None)
 
             encoder_state_dict = torch.load(Path(__file__).with_name("resnet18-5c106cde.pth"), weights_only=False)
@@ -34,31 +30,21 @@ class Model(nn.Module):
             self.net.load_state_dict(state_dict)
 
         else:
+            from .bisenet import BiSeNet
+
             self.net = BiSeNet(n_classes=19)
             model_path = Path(__file__).with_name("79999_iter.pth")
             self.net.load_state_dict(torch.load(model_path, map_location=torch.device("cpu"), weights_only=True))
 
+            self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406], dtype=torch.float).view(1, 3, 1, 1), persistent=False)
+            self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225], dtype=torch.float).view(1, 3, 1, 1), persistent=False)
+            self.register_buffer("parts_idx", torch.tensor([1, 2, 3, 4, 5, 6, 10, 11, 12, 13], dtype=torch.float), persistent=False)
+
         if compile_model:
-            self.net = torch.compile(
-                self.net,
-                fullgraph=True,
-                dynamic=False,
-                options={
-                    "triton.cudagraphs": True,
-                    "max_autotune": True,
-                    "epilogue_fusion": True,
-                },
-            )
+            self.net = torch.compile(self.net, mode="max-autotune")
 
-        self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406], dtype=torch.float).view(1, 3, 1, 1), persistent=False)
-        self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225], dtype=torch.float).view(1, 3, 1, 1), persistent=False)
-        self.register_buffer("parts_idx", torch.tensor([1, 2, 3, 4, 5, 6, 10, 11, 12, 13], dtype=torch.float), persistent=False)
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
 
-        self.eval()
-        self.requires_grad_(False)
-
-    @torch.no_grad()
-    def process(self, image: torch.Tensor):
         H, W = image.size()[2:]
 
         if self.occ:
@@ -71,13 +57,13 @@ class Model(nn.Module):
             image.add_(1.0).div_(2.0)
 
         mask = self.net(image)
-        mask = F.interpolate(mask, (H, W), mode="bilinear", align_corners=True)
+        mask: torch.Tensor = F.interpolate(mask, (H, W), mode="bilinear", align_corners=True)
 
         if self.occ:
-            mask = (mask > 0).to(dtype=torch.float)
+            mask = (mask > 0).float()
         else:
             parsing = mask.argmax(dim=1)
-            mask = torch.isin(parsing, self.parts_idx).to(dtype=torch.float).unsqueeze(1)
+            mask = torch.isin(parsing, self.parts_idx).float().unsqueeze(1)
 
         return mask
 
@@ -106,14 +92,14 @@ if __name__ == "__main__":
     images = torch.stack(images, dim=0).to(device=device)
 
     for i in range(10):
-        mask = parser.process(images)
+        mask = parser.forward(images)
 
     # 性能测试
     print("执行性能测试...")
     times = []
     for i in range(100):
         start_time = time.time()
-        mask = parser.process(images)
+        mask = parser.forward(images)
         times.append((time.time() - start_time) * 1000)
 
     avg_time = sum(times) / len(times)

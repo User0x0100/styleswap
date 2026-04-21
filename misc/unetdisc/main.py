@@ -1,29 +1,29 @@
 import math
 from functools import partial
 from math import log2
+from typing import Tuple
 
 import torch
+from torch import Tensor
 from linear_attention_transformer import ImageLinearAttention
 from torch import nn
 from torch.autograd import grad
 
 
-def gradient_penalty(images, outputs, weight=10):
+def gradient_penalty(images: Tensor, outputs: Tensor, weight=10) -> Tensor:
     batch_size = images.shape[0]
-    gradients = grad(
-        outputs=outputs, inputs=images, grad_outputs=list(map(lambda t: torch.ones(t.size()).cuda(), outputs)), create_graph=True, retain_graph=True, only_inputs=True
-    )[0]
+    gradients = grad(outputs=outputs, inputs=images, grad_outputs=torch.ones_like(outputs), create_graph=True, retain_graph=True, only_inputs=True)[0]
 
     gradients = gradients.reshape(batch_size, -1)
     return weight * ((gradients.norm(2, dim=1) - 1) ** 2).mean()
 
 
-def calc_pl_lengths(styles, images):
+def calc_pl_lengths(styles: Tensor, images: Tensor) -> Tensor:
     num_pixels = images.shape[2] * images.shape[3]
     pl_noise = torch.randn(images.shape).cuda() / math.sqrt(num_pixels)
     outputs = (images * pl_noise).sum()
 
-    pl_grads = grad(outputs=outputs, inputs=styles, grad_outputs=torch.ones(outputs.shape).cuda(), create_graph=True, retain_graph=True, only_inputs=True)[0]
+    pl_grads = grad(outputs=outputs, inputs=styles, grad_outputs=torch.ones_like(outputs), create_graph=True, retain_graph=True, only_inputs=True)[0]
     return (pl_grads**2).sum(dim=2).mean(dim=1).sqrt()
 
 
@@ -41,7 +41,7 @@ class Flatten(nn.Module):
         super().__init__()
         self.index = index
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         return x.flatten(self.index)
 
 
@@ -51,7 +51,7 @@ class Rezero(nn.Module):
         self.fn = fn
         self.g = nn.Parameter(torch.zeros(1))
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         return self.fn(x) * self.g
 
 
@@ -63,19 +63,19 @@ attn_and_ff = lambda chan: nn.Sequential(
 )
 
 
-def double_conv(chan_in, chan_out):
+def double_conv(chan_in: int, chan_out: int):
     return nn.Sequential(nn.Conv2d(chan_in, chan_out, 3, padding=1), nn.LeakyReLU(0.2), nn.Conv2d(chan_out, chan_out, 3, padding=1), nn.LeakyReLU(0.2))
 
 
 class DownBlock(nn.Module):
-    def __init__(self, input_channels, filters, downsample=True):
+    def __init__(self, input_channels: int, filters: int, downsample: bool = True):
         super().__init__()
         self.conv_res = nn.Conv2d(input_channels, filters, 1, stride=(2 if downsample else 1))
 
         self.net = double_conv(input_channels, filters)
         self.down = nn.Conv2d(filters, filters, 3, padding=1, stride=2) if downsample else None
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
         res = self.conv_res(x)
         x = self.net(x)
         unet_res = x
@@ -88,7 +88,7 @@ class DownBlock(nn.Module):
 
 
 class UpBlock(nn.Module):
-    def __init__(self, input_channels, filters):
+    def __init__(self, input_channels: int, filters: int):
         super().__init__()
         self.conv_res = nn.ConvTranspose2d(input_channels // 2, filters, 1, stride=2)
         self.net = double_conv(input_channels, filters)
@@ -96,7 +96,7 @@ class UpBlock(nn.Module):
         self.input_channels = input_channels
         self.filters = filters
 
-    def forward(self, x, res):
+    def forward(self, x: Tensor, res: Tensor) -> Tensor:
         *_, h, w = x.shape
         conv_res = self.conv_res(x, output_size=(h * 2, w * 2))
         x = self.up(x)
@@ -107,7 +107,7 @@ class UpBlock(nn.Module):
 
 
 class UNetDiscriminator(nn.Module):
-    def __init__(self, image_size, network_capacity=16, transparent=False, fmap_max=512):
+    def __init__(self, image_size: int, network_capacity: int = 16, transparent: bool = False, fmap_max: int = 512):
         super().__init__()
         num_layers = int(log2(image_size) - 3)
         num_init_filters = 3 if not transparent else 4
@@ -147,7 +147,7 @@ class UNetDiscriminator(nn.Module):
         self.up_blocks = nn.ModuleList(list(map(lambda c: UpBlock(c[1] * 2, c[0]), dec_chan_in_out)))
         self.conv_out = nn.Conv2d(3, 1, 1)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
 
         residuals = []
 

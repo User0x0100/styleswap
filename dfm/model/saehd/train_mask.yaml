@@ -1,0 +1,18 @@
+image:
+  - ["/opt/share/deepfake/dataset_1/RealOcc/image/realign_arcface_dst", 1.0]
+
+weight: "log_dfm/train_df/ckpt/2000000.pth"
+
+mask_loss_weight: 10.0
+blur_mask: true
+arch_type: "DF"
+
+lr: 5.0e-5
+batch_size: 8
+device: "cuda:0"
+bf16: true
+compile_model: true
+
+log_path: "log_dfm/train_mask"
+sample_save_every: 1000
+weight_save_every: 10000

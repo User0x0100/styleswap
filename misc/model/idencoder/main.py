@@ -42,33 +42,37 @@ class Model(nn.Module):
 
                 weight = Path(__file__).with_name("glint360k_r50_fp16.pth")
                 # glint360k_r50_fp16.pth from https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch
-                self.backend = iresnet50()
+                self.backbone = iresnet50()
 
             case PROVIDER.ARC_OFFICIAL_R100:
                 weight = Path(__file__).with_name("glint360k_cosface_r100_fp16_0.1.pth")
-                self.backend = iresnet100()
+                self.backbone = iresnet100()
 
             case PROVIDER.ARC_SIMSWAP:
 
                 weight = Path(__file__).with_name("simswap.pth")
-                self.backend = ResNet(block=IRBlock, layers=[3, 4, 23, 3], use_se=True)
+                self.backbone = ResNet(block=IRBlock, layers=[3, 4, 23, 3], use_se=True)
             case PROVIDER.BLENDFACE:
 
                 weight = Path(__file__).with_name("blendface.pth")
-                self.backend = iresnet100()
+                self.backbone = iresnet100()
 
             case _:
                 raise TypeError
 
         ckpt = torch.load(weight, weights_only=True, map_location=torch.device("cpu"))
-        self.backend.load_state_dict(ckpt)
+        self.backbone.load_state_dict(ckpt)
 
         self.eval()
         self.requires_grad_(False)
 
+    def print_named_modules(self):
+        for name, module in self.backbone.named_modules():
+            print(f"{name:40s} -> {module.__class__.__name__}")
+
     def forward(self, x):
         x = F.interpolate(x, SIZE, mode="bicubic", align_corners=False)
-        id = self.backend(x)
+        id = self.backbone(x)
         return F.normalize(id, p=2, dim=1)
 
 

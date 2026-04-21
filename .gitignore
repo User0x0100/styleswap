@@ -18,3 +18,5 @@ onnx_model/
 torch_ext_build/
 torch_ext_build/
 misc/model/synergyNet/3dmm_data
+*.pak
+log_dfm

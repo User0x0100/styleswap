@@ -22,7 +22,6 @@ def mse_loss(pred, target):
     return F.mse_loss(pred, target, reduction="none")
 
 
-@weighted_loss
 def charbonnier_loss(pred, target, eps=1e-12):
     return torch.sqrt((pred - target) ** 2 + eps)
 
@@ -191,8 +190,8 @@ class PerceptualLoss(nn.Module):
         self.criterion_type = criterion
         if self.criterion_type == "l1":
             self.criterion = torch.nn.L1Loss()
-        elif self.criterion_type == "l2":
-            self.criterion = torch.nn.L2loss()
+        elif self.criterion_type == "mse":
+            self.criterion = torch.nn.MSELoss()
         elif self.criterion_type == "fro":
             self.criterion = None
         else:

@@ -1,39 +1,24 @@
-import os
-from functools import lru_cache
-
+from pathlib import Path
 import torch
+from torch import Tensor
+import torch.nn.functional as F
 from torch.amp import custom_fwd
 from torch.autograd import Function
+from torch.autograd.function import FunctionCtx
 from torch.utils.cpp_extension import load
 
 from ... import mode
 
-
-_MODULE_PATH = os.path.dirname(__file__)
-build_dir = os.path.join(_MODULE_PATH, "torch_ext_build")
-os.makedirs(build_dir, exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent
 
 
-@lru_cache(maxsize=1)
-def get_upfirdn2d_ext():
-    return load(
-        "upfirdn2d",
-        sources=[
-            os.path.join(_MODULE_PATH, "src", "upfirdn2d.cpp"),
-            os.path.join(_MODULE_PATH, "src", "upfirdn2d_kernel.cu"),
-        ],
-        build_directory=build_dir,
-        verbose=False,
-    )
-
-
-upfirdn2d_ext = get_upfirdn2d_ext()
+upfirdn2d_ext = load("upfirdn2d", sources=[BASE_DIR / "src" / "upfirdn2d.cpp", BASE_DIR / "src" / "upfirdn2d_kernel.cu"], verbose=False)
 
 
 class UpFirDn2dBackward(Function):
 
     @staticmethod
-    def forward(ctx, grad_output, kernel, grad_kernel, up, down, pad, g_pad, in_size, out_size):
+    def forward(ctx: FunctionCtx, grad_output: Tensor, kernel: Tensor, grad_kernel: Tensor, up: int, down: int, pad: int, g_pad: int, in_size: int, out_size: int) -> Tensor:
 
         up_x, up_y = up
         down_x, down_y = down
@@ -62,14 +47,13 @@ class UpFirDn2dBackward(Function):
         return grad_input
 
     @staticmethod
-    def backward(ctx, gradgrad_input):
+    def backward(ctx: FunctionCtx, gradgrad_input: Tensor) -> tuple[Tensor, None, None, None, None, None, None, None, None]:
         (kernel,) = ctx.saved_tensors
 
         gradgrad_input = gradgrad_input.reshape(-1, ctx.in_size[2], ctx.in_size[3], 1)
 
         gradgrad_out = upfirdn2d_ext.upfirdn2d(gradgrad_input, kernel, ctx.up_x, ctx.up_y, ctx.down_x, ctx.down_y, ctx.pad_x0, ctx.pad_x1, ctx.pad_y0, ctx.pad_y1)
-        # gradgrad_out = gradgrad_out.view(ctx.in_size[0], ctx.out_size[0],
-        #                                  ctx.out_size[1], ctx.in_size[3])
+
         gradgrad_out = gradgrad_out.view(ctx.in_size[0], ctx.in_size[1], ctx.out_size[0], ctx.out_size[1])
 
         return gradgrad_out, None, None, None, None, None, None, None, None
@@ -78,7 +62,7 @@ class UpFirDn2dBackward(Function):
 class UpFirDn2d(Function):
 
     @staticmethod
-    def forward(ctx, input, kernel, up, down, pad):
+    def forward(ctx: FunctionCtx, input: Tensor, kernel: Tensor, up: int, down: int, pad: int) -> Tensor:
         up_x, up_y = up
         down_x, down_y = down
         pad_x0, pad_x1, pad_y0, pad_y1 = pad
@@ -107,13 +91,13 @@ class UpFirDn2d(Function):
         ctx.g_pad = (g_pad_x0, g_pad_x1, g_pad_y0, g_pad_y1)
 
         out = upfirdn2d_ext.upfirdn2d(input, kernel, up_x, up_y, down_x, down_y, pad_x0, pad_x1, pad_y0, pad_y1)
-        # out = out.view(major, out_h, out_w, minor)
+
         out = out.view(-1, channel, out_h, out_w)
 
         return out
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx: FunctionCtx, grad_output):
         kernel, grad_kernel = ctx.saved_tensors
 
         grad_input = UpFirDn2dBackward.apply(grad_output, kernel, grad_kernel, ctx.up, ctx.down, ctx.pad, ctx.g_pad, ctx.in_size, ctx.out_size)
@@ -127,9 +111,6 @@ def upfirdn2d(input: torch.Tensor, kernel: torch.Tensor, up=1, down=1, pad=(0, 0
         return upfirdn2d_native(input, kernel, up, up, down, down, pad[0], pad[1], pad[0], pad[1])
     else:
         return UpFirDn2d.apply(input, kernel, (up, up), (down, down), (pad[0], pad[1], pad[0], pad[1]))
-
-
-import torch.nn.functional as F
 
 
 def upfirdn2d_native(input: torch.Tensor, kernel: torch.Tensor, up_x: int, up_y: int, down_x: int, down_y: int, pad_x0: int, pad_x1: int, pad_y0: int, pad_y1: int):

@@ -536,7 +536,7 @@ def get_5pts(result: torch.Tensor):
 if __name__ == "__main__":
     import torchvision.utils as utils
 
-    from misc.utils import DataFolder, Timer
+    from misc.utils import ImageFolder, Timer
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 6
@@ -559,7 +559,7 @@ if __name__ == "__main__":
     # )
 
     # dataset = DataFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
-    dataset = DataFolder("IDAssets")
+    dataset = ImageFolder("IDAssets")
     images_org = [dataset.random_acquire_tensor().float().to(device=device) for _ in range(batch_size)]
 
     images, scales = batch_resize_and_pad_varsize(images_org, CFG_R50["image_size"], CFG_R50["image_size"])

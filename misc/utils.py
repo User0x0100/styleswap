@@ -3,13 +3,14 @@ import random
 import time
 from functools import wraps
 from pathlib import Path
-from typing import List, Sequence
+from typing import List, Sequence, Tuple
 
 import torch
-from torch import nn
-from torch.nn import functional as F
+from torch import Tensor
 from torchvision.io import decode_image
 from torchvision.io.image import ImageReadMode
+from torchvision.transforms.v2.functional import to_dtype
+import re
 
 
 class Timer:
@@ -50,32 +51,19 @@ class Timer:
             return f"{seconds * 1e6:.3f} µs"
 
 
-import re
+class ImageFolder:
+    def __init__(self, folder: str, file_filters: Sequence[str] = (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"), random_sampling: bool = True):
 
+        def natural_sort_key(filename):
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", filename)]
 
-def natural_sort_key(filename):
-    return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", filename)]
-
-
-class DataFolder:
-    def __init__(
-        self,
-        folder: str,
-        file_filters: Sequence[str] = (
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".bmp",
-            ".tiff",
-            ".tif",
-            ".webp",
-        ),
-    ):
-        self.folder = folder
+        self.folder = Path(folder)
         self.files = [f for f in os.listdir(folder) if f.lower().endswith(file_filters)]
         self.files = sorted(self.files, key=natural_sort_key)
         self.len = len(self.files)
         self.idx = 0
+        self._seq_idx = 0
+        self.random_sampling = random_sampling
 
         if self.len == 0:
             raise FileNotFoundError(f"No valid image files found in folder: {folder}")
@@ -89,13 +77,13 @@ class DataFolder:
     def __next__(self) -> Path:
         if self.idx >= self.len:
             raise StopIteration
-        fp = Path(self.folder) / self.files[self.idx]
+        fp = self.folder.joinpath(self.files[self.idx])
         self.idx += 1
         return fp
 
     def __getitem__(self, index: int) -> Path:
         if 0 <= index < self.len:
-            fp = Path(self.folder) / self.files[index]
+            fp = self.folder.joinpath(self.files[index])
             return fp
         else:
             raise IndexError
@@ -106,45 +94,68 @@ class DataFolder:
     def __str__(self):
         return f"DataFolder(path='{self.folder}', samples={self.len})"
 
-    def sample(self, rando: bool = False) -> Path:
+    def sample(self, loop: bool = True) -> Path:
+        """
+        :return: 返回文件路径
+        """
 
-        if rando:
+        if self.random_sampling:
             fp = self[random.randint(0, self.len - 1)]
         else:
-            if self.idx >= self.len:
+            if self.idx >= self.len and loop:
                 self.idx = 0
             fp = next(self)
 
         return fp
 
-    def sample_tensor(self, rando: bool = False, label: bool = False) -> torch.Tensor | tuple[torch.Tensor, str]:
+    def sample_tensor(self, label: bool = False, loop: bool = True) -> Tensor | Tuple[Tensor, str]:
+        """
+        :param label: 是否返回对应的文件名
+        :return: 位于cpu的 CHW RGB [0 ~ 255] torch.uint8
+        """
 
-        fp = self.sample(rando)
+        fp = self.sample(loop=loop)
+
+        image = decode_image(fp, ImageReadMode.RGB)
+        image = to_dtype(inpt=image, dtype=torch.uint8, scale=True)
 
         if label:
-            return decode_image(fp, ImageReadMode.RGB), fp.name
-        else:
-            return decode_image(fp, ImageReadMode.RGB)
+            return image, fp.name
 
-    def iter_batch_with_tensor(self, batch_size: int, label: bool = False, rando: bool = False):
+        return image
+
+    def iter_batch_with_tensor(self, batch_size: int, label: bool = False):
+        """
+        批量迭代返回tensor
+
+        :param batch_size: 批大小
+        :param label: 是否返回文件名
+        :yield: (images, labels) 如果label=True, 否则只返回 images
+            images 为 List[Tensor], 每个tensor为 CHW RGB [0~255] torch.uint8
+        """
         indices = list(range(self.len))
-        if rando:
+        if self.random_sampling:
             random.shuffle(indices)
 
         for start in range(0, self.len, batch_size):
+            batch_indices = indices[start : start + batch_size]
             images: List[torch.Tensor] = []
             labels: List[str] = []
-            for i in indices[start : start + batch_size]:
-                fp = Path(self.folder) / self.files[i]
-                img = decode_image(fp, mode=ImageReadMode.RGB)
+
+            for i in batch_indices:
+                fp = self[i]
+                img = decode_image(fp, ImageReadMode.RGB)
+                img = to_dtype(inpt=img, dtype=torch.uint8, scale=True)
                 images.append(img)
+
                 if label:
                     labels.append(fp.name)
+
             yield (images, labels) if label else images
 
 
 if __name__ == "__main__":
-    data = DataFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
+    data = ImageFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
     for d, n in data.batch_iterator(3):
         print(n)
         exit(0)

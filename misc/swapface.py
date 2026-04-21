@@ -17,7 +17,7 @@ from misc.model import FaceParsing
 
 from .model import IDEncoder
 from .tools import FaceAlign, tensor2cv_8uc3_bgr
-from .utils import DataFolder
+from .utils import ImageFolder
 
 
 class Swapper(nn.Module):
@@ -79,10 +79,10 @@ class Swapper(nn.Module):
         image = image.to(device=device, dtype=torch.float).div_(255.0).mul_(2.0).sub_(1.0).unsqueeze_(0)
         align_face, _, _ = self.aligner.align(images=image, out_size=(IDEncoder.SIZE,) * 2, dst_pts5_pixel=IDEncoder.get_dst_pts(IDEncoder.SIZE).to(device=device))
 
-        face_mask = self.facepars.process(align_face)
+        face_mask = self.facepars.forward(align_face)
         # align_face = align_face * face_mask + (1.0 - face_mask) * (-1.0)
 
-        id_emb = self.idencoder.extract_id_feats(align_face, face_mask)
+        id_emb = self.idencoder.get_id_feats(align_face, face_mask)
 
         return id_emb
 
@@ -90,7 +90,7 @@ class Swapper(nn.Module):
     def swap_folder(self, fp: str, source: str | None = None, wfp: str | None = None, sf_prefix: str = "", batch_size: int = 8):
 
         device = self.align_dst.device
-        data_folder = DataFolder(fp)
+        data_folder = ImageFolder(fp)
 
         if source is None:
             id_emb = torch.randn((1, 512), dtype=torch.float, device=device)
@@ -110,7 +110,7 @@ class Swapper(nn.Module):
 
             swaped_face, face_mask = self.swap_single(aligned_faces, id_emb[:1])
 
-            fake_id = self.idencoder.extract_id_feats(swaped_face, face_mask)
+            fake_id = self.idencoder.get_id_feats(swaped_face, face_mask)
 
             similaritys = F.cosine_similarity(fake_id, id_emb.expand(fake_id.shape[0], -1), dim=1)
 
@@ -182,7 +182,7 @@ class Swapper(nn.Module):
                 aligned, norm_affine_matrix, idxs = self.aligner.align(list(chunk.unbind(dim=0)), (self.size,) * 2, self.align_dst)
 
                 swaped_face, face_mask = self.swap_single(aligned, id_emb[:1])
-                fake_id = self.idencoder.extract_id_feats(swaped_face, face_mask)
+                fake_id = self.idencoder.get_id_feats(swaped_face, face_mask)
                 similarity = F.cosine_similarity(fake_id, id_emb.expand(fake_id.shape[0], -1))
                 swaped_face = swaped_face * face_mask + aligned * (1.0 - face_mask)
 
@@ -199,15 +199,15 @@ class Swapper(nn.Module):
 if __name__ == "__main__":
     from loguru import logger
 
-    from misc.utils import DataFolder
+    from misc.utils import ImageFolder
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"{device=}")
-    dataset = DataFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
+    dataset = ImageFolder("/opt/share/deepfake/dataset_1/ffhq_1024")
     # dataset = DataFolder("IDAssets")
     logger.info(f"{dataset=}")
 
-    ckpt = "log/train_7_f32/ckpt/5035000.pth"
+    ckpt = "log/train_7_f32/ckpt/5715000.pth"
     logger.info(f"{ckpt=}")
 
     target = "/opt/share/deepfake/linshi/录屏素材/2023-04-14(李云帆 陈雨)/20230414-163616614陈雨(电脑录屏).mp4"

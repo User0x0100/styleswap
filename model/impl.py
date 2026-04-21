@@ -16,11 +16,11 @@ class PixelNorm(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, input: Tensor):
+    def forward(self, input: Tensor) -> Tensor:
         return input * torch.rsqrt(torch.mean(input**2, dim=1, keepdim=True) + EPS)
 
 
-def make_kernel(k):
+def make_kernel(k: float) -> Tensor:
     k = torch.tensor(k, dtype=torch.float32)
 
     if k.ndim == 1:
@@ -32,7 +32,7 @@ def make_kernel(k):
 
 
 class Upsample(nn.Module):
-    def __init__(self, kernel, factor=2):
+    def __init__(self, kernel, factor: int = 2):
         super().__init__()
 
         self.factor = factor
@@ -46,14 +46,14 @@ class Upsample(nn.Module):
 
         self.pad = (pad0, pad1)
 
-    def forward(self, input: Tensor):
+    def forward(self, input: Tensor) -> Tensor:
         out = upfirdn2d(input, self.kernel, up=self.factor, down=1, pad=self.pad)
 
         return out
 
 
 class Downsample(nn.Module):
-    def __init__(self, kernel, factor=2):
+    def __init__(self, kernel: Tensor, factor: int = 2):
         super().__init__()
 
         self.factor = factor
@@ -67,14 +67,14 @@ class Downsample(nn.Module):
 
         self.pad = (pad0, pad1)
 
-    def forward(self, input: Tensor):
+    def forward(self, input: Tensor) -> Tensor:
         out = upfirdn2d(input, self.kernel, up=1, down=self.factor, pad=self.pad)
 
         return out
 
 
 class Blur(nn.Module):
-    def __init__(self, kernel, pad, upsample_factor=1):
+    def __init__(self, kernel: float, pad: int, upsample_factor: int = 1):
         super().__init__()
 
         kernel = make_kernel(kernel)
@@ -86,7 +86,7 @@ class Blur(nn.Module):
 
         self.pad = pad
 
-    def forward(self, input: Tensor):
+    def forward(self, input: Tensor) -> Tensor:
         out = upfirdn2d(input, self.kernel, pad=self.pad)
 
         return out
@@ -115,15 +115,7 @@ class EqualConv2d(nn.Module):
 
 
 class EqualLinear(nn.Module):
-    def __init__(
-        self,
-        in_dim,
-        out_dim,
-        bias=True,
-        bias_init=0,
-        lr_mul=1.0,
-        activation=None,
-    ):
+    def __init__(self, in_dim, out_dim, bias=True, bias_init=0, lr_mul=1.0, activation=None):
         super().__init__()
 
         self.weight = nn.Parameter(torch.randn(out_dim, in_dim).div_(lr_mul))
@@ -138,7 +130,7 @@ class EqualLinear(nn.Module):
         self.scale = (1 / math.sqrt(in_dim)) * lr_mul
         self.lr_mul = lr_mul
 
-    def forward(self, input: Tensor):
+    def forward(self, input: Tensor) -> Tensor:
         if self.activation:
             out = F.linear(input, self.weight * self.scale)
             out = fused_leaky_relu(out, self.bias * self.lr_mul)
@@ -205,7 +197,7 @@ class ModulatedConv2d(nn.Module):
     def __repr__(self):
         return f"{self.__class__.__name__}({self.in_channel}, {self.out_channel}, {self.kernel_size}, " f"upsample={self.upsample}, downsample={self.downsample})"
 
-    def forward(self, input: Tensor, style: Tensor):
+    def forward(self, input: Tensor, style: Tensor) -> Tensor:
         # batch, in_channel, height, width = map(int, input.shape)
         # batch, in_channel, height, width = input.shape
         if mode.EXPORT_MODE:
@@ -260,7 +252,7 @@ class NoiseInjection(nn.Module):
         self.isconcat = isconcat
         self.weight = nn.Parameter(torch.zeros(1))
 
-    def forward(self, image: Tensor, noise: Tensor | None = None):
+    def forward(self, image: Tensor, noise: Tensor | None = None) -> Tensor:
         if noise is None:
             batch, channel, height, width = image.shape
             noise = image.new_empty(batch, channel, height, width).normal_()
@@ -277,7 +269,7 @@ class ConstantInput(nn.Module):
 
         self.input = nn.Parameter(torch.randn(1, channel, size, size))
 
-    def forward(self, input: Tensor):
+    def forward(self, input: Tensor) -> Tensor:
         batch = input.shape[0]
         out = self.input.repeat(batch, 1, 1, 1)
 
@@ -304,7 +296,7 @@ class StyledConv(nn.Module):
         feat_multiplier = 2 if isconcat else 1
         self.activate = FusedLeakyReLU(out_channel * feat_multiplier)
 
-    def forward(self, input: Tensor, style: Tensor, noise: Tensor | None = None):
+    def forward(self, input: Tensor, style: Tensor, noise: Tensor | None = None) -> Tensor:
         out = self.conv(input, style)
         out = self.noise(out, noise=noise)
         # out = out + self.bias
@@ -323,7 +315,7 @@ class ToRGB(nn.Module):
         self.conv = ModulatedConv2d(in_channel, 3, 1, style_dim, demodulate=False)
         self.bias = nn.Parameter(torch.zeros(1, 3, 1, 1))
 
-    def forward(self, input: Tensor, style: Tensor, skip: Tensor | None = None):
+    def forward(self, input: Tensor, style: Tensor, skip: Tensor | None = None) -> Tensor:
         out = self.conv(input, style)
         out = out + self.bias
 
@@ -565,7 +557,7 @@ class ResBlock(nn.Module):
 
         self.skip = ConvLayer(in_channel, out_channel, 1, downsample=True, blur_kernel=blur_kernel, activate=False, bias=False)
 
-    def forward(self, input: Tensor):
+    def forward(self, input: Tensor) -> Tensor:
         out = self.conv1(input)
         out = self.conv2(out)
 
@@ -628,9 +620,8 @@ class FullGenerator(nn.Module):
         if mode.EXPORT_MODE:
             out_img = out_img.permute(0, 2, 3, 1)
             mask = mask.permute(0, 2, 3, 1)
-            return out_img, mask
-        else:
-            return out_img, latent, mask
+
+        return out_img, mask
 
 
 class StyleGAN2Discriminator(nn.Module):
@@ -778,7 +769,7 @@ if __name__ == "__main__":
     from prettytable import PrettyTable
     from torch.nn import functional as F
 
-    from misc.utils import DataFolder
+    from misc.utils import ImageFolder
 
     size = 512
     batch_size = 1

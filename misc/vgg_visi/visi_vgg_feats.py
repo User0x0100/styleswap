@@ -6,14 +6,14 @@ from torch import nn as nn
 from torch.nn import functional as F
 from torchvision.models import VGG19_Weights, vgg19
 
-from misc.utils import DataFolder
+from misc.utils import ImageFolder
 
 size = 1024
 batch_size = 2
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-dataset = DataFolder("/opt/share/deepfake/dataset_1/ffhq_1024").iter_batch_with_tensor(batch_size=batch_size, rando=True)
+dataset = ImageFolder("/opt/share/deepfake/dataset_1/ffhq_1024").iter_batch_with_tensor(batch_size=batch_size, rando=True)
 
 
 image = torch.stack(next(dataset))
